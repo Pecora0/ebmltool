@@ -9,7 +9,7 @@
 #include "thirdparty/yxml.h"
 
 #define SCHEMA_FILE_NAME "example.xml"
-#define TARGET_FILE_NAME "build/example-lib.h"
+#define TARGET_LIBRARY_NAME "libexample"
 
 #define XML_PARSE_BUFSIZE 4069
 char xml_parse_buffer[XML_PARSE_BUFSIZE];
@@ -49,12 +49,40 @@ Short_String append(Short_String str1, char *str2) {
     return shortf("%s%s", str1.cstr, str2);
 }
 
+Short_String capitalize(Short_String str) {
+    for (size_t i=0; i<SHORT_STRING_LENGTH; i++) {
+        if (str.cstr[i] == '\0') {
+            return str;
+        } else if ('a' <= str.cstr[i] && str.cstr[i] <= 'z') {
+            str.cstr[i] = str.cstr[i] + ('A' - 'a');
+        }
+    }
+    UNREACHABLE("short string has no zero termination");
+}
+
 typedef struct {
     Short_String name;
     Short_String path;
     Short_String id;
     Short_String type;
+    Short_String range;
 } Pre_EBML_Element;
+
+void init_pre_element(Pre_EBML_Element *elem) {
+    elem->name.cstr[0]  = '\0';
+    elem->path.cstr[0]  = '\0';
+    elem->id.cstr[0]    = '\0';
+    elem->type.cstr[0]  = '\0';
+    elem->range.cstr[0] = '\0';
+}
+
+void print_pre_element(Pre_EBML_Element elem) {
+    printf("[INFO]     name  = '%s'\n", elem.name.cstr);
+    printf("[INFO]     path  = '%s'\n", elem.path.cstr);
+    printf("[INFO]     id    = '%s'\n", elem.id.cstr);
+    printf("[INFO]     type  = '%s'\n", elem.type.cstr);
+    printf("[INFO]     range = '%s'\n", elem.range.cstr);
+}
 
 typedef enum {
     MASTER,
@@ -65,22 +93,80 @@ typedef enum {
     BINARY,
 } EBML_Type;
 
+typedef enum {
+    RANGE_NONE,
+    RANGE_UPPER_BOUND,
+    RANGE_LOWER_BOUND,
+    RANGE_UPLOW_BOUND,
+    RANGE_EXACT,
+    RANGE_EXCLUDED,
+} Range_Kind;
+
+typedef struct {
+    Range_Kind kind;
+    uint64_t lo;
+    bool lo_in;
+    uint64_t hi;
+    bool hi_in;
+} EBML_Range;
+
 typedef struct {
     Short_String name;
     Short_String path;
     uint64_t id;
     EBML_Type type;
+    EBML_Range range;
 } EBML_Element;
 
 #define MAX_ELEMENT_COUNT 32
 EBML_Element element_list[MAX_ELEMENT_COUNT];
 size_t element_count = 0;
 
-void init_element(Pre_EBML_Element *elem) {
-    elem->name.cstr[0] = '\0';
-    elem->path.cstr[0] = '\0';
-    elem->id.cstr[0]   = '\0';
-    elem->type.cstr[0] = '\0';
+EBML_Range parse_range(Short_String str) {
+    uint64_t acc = 0;
+    for (size_t i=0; i<SHORT_STRING_LENGTH; i++) {
+        char c = str.cstr[i];
+        if (c == '\0') {
+            EBML_Range result;
+            if (i == 0) {
+                result.kind = RANGE_NONE;
+            } else {
+                result.kind = RANGE_EXACT;
+                result.lo = acc;
+                result.hi = acc;
+            }
+            return result;
+        } else if ('0' <= c && c <= '9') {
+            acc = 10*acc + (c - '0');
+        } else {
+            printf("[ERROR] got character %c\n", c);
+            UNIMPLEMENTED("parse_range");
+        }
+    }
+    UNREACHABLE("Short_String is not zero terminated");
+}
+
+bool has_upper_bound(EBML_Range r) {
+    return r.kind == RANGE_UPPER_BOUND || r.kind == RANGE_UPLOW_BOUND || r.kind == RANGE_EXACT;
+}
+
+size_t upper_bound(EBML_Range r) {
+    switch (r.kind) {
+        case RANGE_NONE:
+        case RANGE_LOWER_BOUND:
+        case RANGE_EXCLUDED:
+            UNREACHABLE("range has no upper bound");
+        case RANGE_UPPER_BOUND:
+        case RANGE_UPLOW_BOUND:
+            if (!r.hi_in) {
+                UNIMPLEMENTED("exclusive bound");
+            }
+            return r.hi;
+        case RANGE_EXACT:
+            assert(r.hi == r.lo);
+            return r.hi;
+    }
+    UNREACHABLE("no Range_Kind matched");
 }
 
 EBML_Element process_element(Pre_EBML_Element elem) {
@@ -109,6 +195,7 @@ EBML_Element process_element(Pre_EBML_Element elem) {
         printf("[ERROR] Unknown type '%s' in element '%s'\n", elem.type.cstr, elem.name.cstr);
         exit(1);
     }
+    result.range = parse_range(elem.range);
     return result;
 }
 
@@ -144,13 +231,15 @@ int main(void) {
             case YXML_ELEMSTART:
                 if (strcmp(parser.elem, "element") == 0) {
                     in_element = true;
-                    init_element(&new);
+                    init_pre_element(&new);
                 }
                 break;
             case YXML_CONTENT:  
                 break;
             case YXML_ELEMEND:
                 if (in_element) {
+                    // printf("[INFO] found element:\n");
+                    // print_pre_element(new);
                     append_element(process_element(new));
                     in_element = false;
                 }
@@ -167,6 +256,8 @@ int main(void) {
                         new.id = append(new.id, parser.data);
                     } else if (strcmp(parser.attr, "type") == 0) {
                         new.type = append(new.type, parser.data);
+                    } else if (strcmp(parser.attr, "range") == 0) {
+                        new.range = append(new.range, parser.data);
                     }
                 }
                 break;
@@ -187,15 +278,67 @@ int main(void) {
     if (r < 0) {
         UNIMPLEMENTED("parse error handling");
     }
+    fclose(schema_file);
 
-    // fclose(schema_file);
-    // FILE *target_file = fopen(TARGET_FILE_NAME, "w");
-    // if (target_file == NULL) {
-    //     printf("[ERROR] Could not open file '%s': %s\n", TARGET_FILE_NAME, strerror(errno));
+    Short_String target_file_name = shortf("build/%s.h", TARGET_LIBRARY_NAME);
+    Short_String include_guard = capitalize(shortf("%s_H", TARGET_LIBRARY_NAME));
+    Short_String implementation_guard = capitalize(shortf("%s_IMPLEMENTATION", TARGET_LIBRARY_NAME));
+    // EBML_Range max_id_length_range = {
+    //     .kind = RANGE_LOWER_BOUND,
+    //     .lo = 4,
+    //     .lo_in = true,
+    // };
+    // for (size_t i=0; i<element_count; i++) {
+    //     if (element_list[i].id == 0x42F2) {
+    //         printf("[INFO] found redefinition of element MaxIdLength\n");
+    //         max_id_length_range = element_list[i].range;
+    //     }
     // }
-    // fclose(target_file);
+    // EBML_Range max_size_length_range = {
+    //     .kind = RANGE_EXCLUDED,
+    //     .lo = 0,
+    //     .hi = 0,
+    // };
+    // for (size_t i=0; i<element_count; i++) {
+    //     if (element_list[i].id == 0x42F3) {
+    //         printf("[INFO] found redefinition of element MaxSizeLength\n");
+    //         max_size_length_range = element_list[i].range;
+    //     }
+    // }
 
-    for (size_t i=0; i<element_count; i++) {
-        printf("%zu\t%s\t%s\t0x%lX\n", i, element_list[i].name.cstr, element_list[i].path.cstr, element_list[i].id);
+    FILE *target_file = fopen(target_file_name.cstr, "w");
+    if (target_file == NULL) {
+        printf("[ERROR] Could not open file '%s': %s\n", target_file_name.cstr, strerror(errno));
     }
+
+    fprintf(target_file, "#ifndef %s\n",   include_guard.cstr);
+    fprintf(target_file, "#define %s\n",   include_guard.cstr);
+    fprintf(target_file, "\n");
+
+    // header code
+    Short_String byte_type_name   = shortf("%s_byte_t", TARGET_LIBRARY_NAME);
+    Short_String parser_type_name = shortf("%s_parser_t", TARGET_LIBRARY_NAME);
+    Short_String return_type_name = shortf("%s_return_t", TARGET_LIBRARY_NAME);
+    fprintf(target_file, "typedef unsigned char %s;\n", byte_type_name.cstr);
+    fprintf(target_file, "\n");
+    fprintf(target_file, "typedef enum {\n");
+    fprintf(target_file, "} %s;\n", return_type_name.cstr);
+    fprintf(target_file, "\n");
+    fprintf(target_file, "typedef struct {\n");
+    fprintf(target_file, "    Parser_State state;\n");
+    fprintf(target_file, "} %s;\n", parser_type_name.cstr);
+    fprintf(target_file, "\n");
+    fprintf(target_file, "void %s_init(%s *p);\n", TARGET_LIBRARY_NAME, parser_type_name.cstr);
+    fprintf(target_file, "%s %s_parse(%s *p, %s b);\n", return_type_name.cstr, TARGET_LIBRARY_NAME, parser_type_name.cstr, byte_type_name.cstr);
+    fprintf(target_file, "void %s_eof(%s *p);\n", TARGET_LIBRARY_NAME, parser_type_name.cstr);
+
+    fprintf(target_file, "\n");
+    fprintf(target_file, "#endif // %s\n", include_guard.cstr);
+
+    fprintf(target_file, "\n");
+    fprintf(target_file, "#ifdef %s\n",    implementation_guard.cstr);
+    // implementation goes here
+    fprintf(target_file, "#endif // %s\n", implementation_guard.cstr);
+
+    fclose(target_file);
 }
