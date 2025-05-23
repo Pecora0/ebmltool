@@ -15,5 +15,5 @@ build/libexample.h: build/tool
 build/test: test.c build/libexample.h
 	gcc -Wall -Wextra -Werror -o build/test test.c
 
-runtest: build/test test.mkv
-	./build/test test.mkv
+runtest: build/test
+	./build/test Touhou-BadApple.mkv

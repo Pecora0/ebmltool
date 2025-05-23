@@ -110,43 +110,42 @@ typedef struct {
     bool hi_in;
 } EBML_Range;
 
+#define MAX_PATH_DEPTH 8
+
+typedef struct {
+    size_t depth;
+    Short_String names[MAX_PATH_DEPTH];
+} EBML_Path;
+
 typedef struct {
     Short_String name;
-    Short_String path;
+    EBML_Path path;
     uint64_t id;
     EBML_Type type;
     EBML_Range range;
 } EBML_Element;
 
-EBML_Element default_header[] = {
+Pre_EBML_Element default_header[] = {
     {
         .name = {"EBML"},
         .path = {"\\EBML"},
-        .id   = 0x1A45DFA3,
-        .type = MASTER,
+        .id   = {"0x1A45DFA3"},
+        .type = {"master"},
     },
     {
         .name  = {"EBMLVersion"},
         .path  = {"\\EBML\\EBMLVersion"},
-        .id    = 0x4286,
-        .type  = UINTEGER,
-        .range = {
-            .kind = RANGE_EXCLUDED,
-            .lo = 0,
-            .hi = 0,
-            },
+        .id    = {"0x4286"},
+        .type  = {"uinteger"},
+        .range = {"not 0"},
     },
 
     {
         .name  = {"EBMLReadVersion"},
         .path  = {"\\EBML\\EBMLReadVersion"},
-        .id    = 0x42F7,
-        .range = {
-            .kind = RANGE_EXACT,
-            .lo = 1,
-            .hi = 1,
-            },
-        .type  = UINTEGER,
+        .id    = {"0x42F7"},
+        .range = {"1"},
+        .type  = {"uinteger"},
     },
 /*
     {
@@ -326,6 +325,20 @@ EBML_Range parse_range(Short_String str) {
     UNREACHABLE("Short_String is not zero terminated");
 }
 
+EBML_Path parse_path(Short_String str) {
+    EBML_Path result = {
+        .depth = 0,
+    };
+    UNUSED(result);
+    char *path_delim = "\\";
+    for (char *name = strtok(str.cstr, path_delim); name != NULL; name = strtok(NULL, path_delim)) {
+        assert(result.depth < MAX_PATH_DEPTH);
+        result.names[result.depth] = shortf("%s", name);
+        result.depth++;
+    }
+    return result;
+}
+
 bool has_upper_bound(EBML_Range r) {
     return r.kind == RANGE_UPPER_BOUND || r.kind == RANGE_UPLOW_BOUND || r.kind == RANGE_EXACT;
 }
@@ -352,7 +365,7 @@ size_t upper_bound(EBML_Range r) {
 EBML_Element process_element(Pre_EBML_Element elem) {
     EBML_Element result = {
         .name = elem.name,
-        .path = elem.path,
+        .path = parse_path(elem.path),
     };
     result.id = strtol(elem.id.cstr, NULL, 16);
     if (errno > 0) {
@@ -410,24 +423,29 @@ void print_line(FILE *stream, int depth, char *format, ...) {
     fprintf(stream, "\n");
 }
 
-const char *states[] = {
-    "START",
-    "ID",
-    "SIZE",
-    "DATA",
+typedef enum {
+    SUBSTATE_ID,
+    SUBSTATE_SIZE,
+    SUBSTATE_DATA,
+    SUBSTATE_COUNT,
+} Substate;
+
+const char *substate_as_string[] = {
+    [SUBSTATE_ID]    = "ID",
+    [SUBSTATE_SIZE]  = "SIZE",
+    [SUBSTATE_DATA]  = "DATA",
 };
-const size_t state_count = sizeof(states) / sizeof(char *);
 const size_t state_start = 0;
 
-Short_String build_state_nr(size_t elemnr, size_t i, Short_String pre) {
+Short_String build_state_nr(size_t elemnr, Substate state, Short_String pre) {
     assert(elemnr < element_count);
-    assert(i < state_count);
-    return shortf("%s_E%zu_%s", pre.cstr, elemnr, states[i]);
+    assert(state < SUBSTATE_COUNT);
+    return shortf("%s_E%zu_%s", pre.cstr, elemnr, substate_as_string[state]);
 }
 
 int main(void) {
     for (size_t i=0; i<sizeof(default_header)/sizeof(default_header[0]); i++) {
-        append_element(default_header[i]);
+        append_element(process_element(default_header[i]));
     }
     FILE *schema_file = fopen(SCHEMA_FILE_NAME, "r");
     if (schema_file == NULL) {
@@ -528,6 +546,9 @@ int main(void) {
     print_line(target_file, 0, "#ifndef %s",   include_guard.cstr);
     print_line(target_file, 0, "#define %s",   include_guard.cstr);
     line();
+    print_line(target_file, 0, "#include <assert.h>");
+    print_line(target_file, 0, "#include <stdint.h>");
+    line();
 
     // header code
     print_line(target_file, 0, "typedef unsigned char %s;", byte_type_name.cstr);
@@ -538,7 +559,7 @@ int main(void) {
     line();
     print_line(target_file, 0, "typedef enum {");
     for (size_t i=0; i<element_count; i++) {
-        for (size_t j=0; j<state_count; j++) {
+        for (Substate j=0; j<SUBSTATE_COUNT; j++) {
             print_line(target_file, 1, "%s,", build_state_nr(i, j, prefix_caps).cstr);
         }
     }
@@ -546,7 +567,7 @@ int main(void) {
     line();
     print_line(target_file, 0, "const char *state_as_string[] = {");
     for (size_t i=0; i<element_count; i++) {
-        for (size_t j=0; j<state_count; j++) {
+        for (Substate j=0; j<SUBSTATE_COUNT; j++) {
             print_line(target_file, 1, "[%s] = \"%s\",", build_state_nr(i, j, prefix_caps).cstr, build_state_nr(i, j, prefix_caps).cstr);
         }
     }
@@ -554,7 +575,9 @@ int main(void) {
     line();
     print_line(target_file, 0, "typedef struct {");
     print_line(target_file, 1,     "%s state;", state_type_name.cstr);
-    print_line(target_file, 1,     "size_t bytes_left;");
+    print_line(target_file, 1,     "ssize_t bytes_left;");
+    print_line(target_file, 1,     "uint64_t id;");
+    print_line(target_file, 1,     "uint64_t size;");
     print_line(target_file, 0, "} %s;", parser_type_name.cstr);
     line();
     print_line(target_file, 0, "%s;", init_func_signature.cstr);
@@ -577,35 +600,66 @@ int main(void) {
     print_line(target_file, 1,     "return acc;");
     print_line(target_file, 0, "}");
     line();
+    print_line(target_file, 0, "%s drop_first_active_bit(%s x) {", byte_type_name.cstr, byte_type_name.cstr);
+    print_line(target_file, 0, "    UNUSED(x);");
+    print_line(target_file, 0, "    %s mask = ~0;", byte_type_name.cstr);
+    print_line(target_file, 0, "    while (mask >= x) mask >>= 1;");
+    print_line(target_file, 0, "    return mask & x;");
+    print_line(target_file, 0, "}");
+    line();
     print_line(target_file, 0, "%s {\n", init_func_signature.cstr);
     print_line(target_file, 1,     "p->state = %s;", build_state_nr(0, state_start, prefix_caps).cstr);
-    print_line(target_file, 1,     "p->bytes_left = 0;");
+    print_line(target_file, 1,     "p->bytes_left = -1;");
     print_line(target_file, 0, "}\n");
     line();
     print_line(target_file, 0, "%s {\n", parse_func_signature.cstr);
     print_line(target_file, 0, "    switch (p->state) {");
     for (size_t i=0; i<element_count; i++) {
-        print_line(target_file, 0, "        case %s:", build_state_nr(i, 0, prefix_caps).cstr);
-        print_line(target_file, 0, "            p->bytes_left = vint_length(b) - 1;");
-        print_line(target_file, 0, "            p->state = %s;", build_state_nr(i, 1, prefix_caps).cstr);
-        print_line(target_file, 0, "            break;");
-        print_line(target_file, 0, "        case %s:", build_state_nr(i, 1, prefix_caps).cstr);
-        print_line(target_file, 0, "            if (p->bytes_left == 0) {");
-        print_line(target_file, 0, "                p->bytes_left = vint_length(b) - 1;");
-        print_line(target_file, 0, "                p->state = %s;", build_state_nr(i, 2, prefix_caps).cstr);
-        print_line(target_file, 0, "            } else {");
-        print_line(target_file, 0, "                p->bytes_left--;");
-        print_line(target_file, 0, "            }");
-        print_line(target_file, 0, "            break;");
-        print_line(target_file, 0, "        case %s:", build_state_nr(i, 2, prefix_caps).cstr);
-        print_line(target_file, 0, "            if (p->bytes_left == 0) {");
-        print_line(target_file, 0, "                UNIMPLEMENTED(\"0 bytes left for %s\");", build_state_nr(i, 2, prefix_caps).cstr);
-        print_line(target_file, 0, "            } else {");
-        print_line(target_file, 0, "                p->bytes_left--;");
-        print_line(target_file, 0, "            }");
-        print_line(target_file, 0, "            break;");
-        print_line(target_file, 0, "        case %s:", build_state_nr(i, 3, prefix_caps).cstr);
-        print_line(target_file, 0, "            UNIMPLEMENTED(\"%s\");", build_state_nr(i, 3, prefix_caps).cstr);
+        print_line(target_file, 2, "case %s:", build_state_nr(i, SUBSTATE_ID, prefix_caps).cstr);
+        print_line(target_file, 2, "    if (p->bytes_left < 0) {");
+        print_line(target_file, 2, "        p->bytes_left = vint_length(b) - 1;");
+        print_line(target_file, 2, "        p->id = 0;");
+        print_line(target_file, 2, "    }");
+        print_line(target_file, 2, "    assert(p->bytes_left >= 0);");
+        print_line(target_file, 2, "    p->id = 0x100 * p->id + b;");
+        print_line(target_file, 2, "    if (p->bytes_left == 0) {");
+        print_line(target_file, 2, "        assert(p->id == 0x%lX);", element_list[0].id);
+        print_line(target_file, 2, "        p->state = %s;", build_state_nr(i, SUBSTATE_SIZE, prefix_caps).cstr);
+        print_line(target_file, 2, "        p->bytes_left = -1;");
+        print_line(target_file, 2, "    } else {");
+        print_line(target_file, 2, "        p->bytes_left--;");
+        print_line(target_file, 2, "    }");
+        print_line(target_file, 2, "    break;");
+        print_line(target_file, 2, "case %s:", build_state_nr(i, SUBSTATE_SIZE, prefix_caps).cstr);
+        print_line(target_file, 2, "    if (p->bytes_left < 0) {");
+        print_line(target_file, 2, "        p->bytes_left = vint_length(b) - 1;");
+        print_line(target_file, 2, "        p->size = drop_first_active_bit(b);");
+        print_line(target_file, 2, "    } else {");
+        print_line(target_file, 2, "        p->size = 0x100 * p->size + b;");
+        print_line(target_file, 2, "    }");
+        print_line(target_file, 2, "    assert(p->bytes_left >= 0);");
+        print_line(target_file, 2, "    if (p->bytes_left == 0) {");
+        switch (element_list[i].type) {
+            case MASTER:
+                UNIMPLEMENTED("state change after size was read");
+            case UINTEGER:
+                UNIMPLEMENTED("state change after size was read");
+            case UTF_8:
+                UNIMPLEMENTED("state change after size was read");
+            case STRING:
+                UNIMPLEMENTED("state change after size was read");
+            case DATE:
+                UNIMPLEMENTED("state change after size was read");
+            case BINARY:
+                UNIMPLEMENTED("state change after size was read");
+        }
+        print_line(target_file, 2, "        p->bytes_left = -1;");
+        print_line(target_file, 2, "    } else {");
+        print_line(target_file, 2, "        p->bytes_left--;");
+        print_line(target_file, 2, "    }");
+        print_line(target_file, 2, "    break;");
+        print_line(target_file, 2, "case %s:", build_state_nr(i, SUBSTATE_DATA, prefix_caps).cstr);
+        print_line(target_file, 2, "    UNIMPLEMENTED(\"%s\");", build_state_nr(i, SUBSTATE_DATA, prefix_caps).cstr);
     }
     print_line(target_file, 0, "    }");
     print_line(target_file, 0, "    return %s_OK;", prefix_caps.cstr);
@@ -619,7 +673,9 @@ int main(void) {
     print_line(target_file, 0, "%s {", print_func_signature.cstr);
     print_line(target_file, 0, "    printf(\"[INFO] Parser\\n\");");
     print_line(target_file, 0, "    printf(\"[INFO]   state = %%s\\n\", state_as_string[p->state]);");
-    print_line(target_file, 0, "    printf(\"[INFO]   bytes_left = %%zu\\n\", p->bytes_left);");
+    print_line(target_file, 0, "    printf(\"[INFO]   bytes_left = %%zd\\n\", p->bytes_left);");
+    print_line(target_file, 0, "    printf(\"[INFO]   id = 0x%%lX\\n\", p->id);");
+    print_line(target_file, 0, "    printf(\"[INFO]   size = %%ld\\n\", p->size);");
     print_line(target_file, 0, "}");
 
     line();
