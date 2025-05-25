@@ -497,6 +497,112 @@ uint64_t first_byte(uint64_t x) {
 
 #define MAX_STACK_SIZE 8
 
+void define_parser_type(FILE *f, Short_String parser_type_name, Short_String state_type_name) {
+    print_line(f, 0, "typedef struct {");
+    print_line(f, 1,     "size_t depth;");
+    print_line(f, 1,     "%s state;", state_type_name.cstr);
+    print_line(f, 1,     "ssize_t bytes_left;");
+    print_line(f, 1,     "uint64_t id[%d];", MAX_STACK_SIZE);
+    print_line(f, 1,     "uint64_t size[%d];", MAX_STACK_SIZE);
+    print_line(f, 0, "} %s;", parser_type_name.cstr);
+}
+
+void implement_vint_length(FILE *f, Short_String byte_type_name) {
+    print_line(f, 0, "size_t vint_length(%s b) {", byte_type_name.cstr);
+    print_line(f, 1,     "if (b == 0) UNIMPLEMENTED(\"zero byte in vint_length\");");
+    print_line(f, 1,     "size_t acc = 1;");
+    print_line(f, 1,     "for (%s mark = 0x80; (mark & b) == 0; mark>>=1) acc++;", byte_type_name.cstr);
+    print_line(f, 1,     "return acc;");
+    print_line(f, 0, "}");
+}
+
+void implement_drop_first_active_bit(FILE *f, Short_String byte_type_name) {
+    print_line(f, 0, "%s drop_first_active_bit(%s x) {", byte_type_name.cstr, byte_type_name.cstr);
+    print_line(f, 0, "    UNUSED(x);");
+    print_line(f, 0, "    %s mask = ~0;", byte_type_name.cstr);
+    print_line(f, 0, "    while (mask >= x) mask >>= 1;");
+    print_line(f, 0, "    return mask & x;");
+    print_line(f, 0, "}");
+}
+
+void implement_init_func(FILE *f, Short_String signature, Short_String state) {
+    print_line(f, 0, "%s {\n", signature.cstr);
+    print_line(f, 1,     "p->depth = 0;");
+    print_line(f, 1,     "p->state = %s;", state.cstr);
+    print_line(f, 1,     "p->bytes_left = -1;");
+    print_line(f, 0, "}\n");
+}
+
+void implement_parse_func(FILE *f, Short_String signature, Short_String state_prefix) {
+    print_line(f, 0, "%s {\n", signature.cstr);
+    print_line(f, 0, "    switch (p->state) {");
+    print_line(f, 2, "case %s:", build_state_nr(SUBSTATE_ID, state_prefix).cstr);
+    print_line(f, 2, "    if (p->bytes_left < 0) {");
+    print_line(f, 2, "        p->bytes_left = vint_length(b) - 1;");
+    print_line(f, 2, "        p->id[p->depth] = 0;");
+    print_line(f, 2, "    }");
+    print_line(f, 2, "    assert(p->bytes_left >= 0);");
+    print_line(f, 2, "    p->id[p->depth] = 0x100 * p->id[p->depth] + b;");
+    print_line(f, 2, "    if (p->bytes_left == 0) {");
+    print_line(f, 2, "        p->state = %s;", build_state_nr(SUBSTATE_SIZE, state_prefix).cstr);
+    print_line(f, 2, "        p->bytes_left = -1;");
+    print_line(f, 2, "    } else {");
+    print_line(f, 2, "        p->bytes_left--;");
+    print_line(f, 2, "    }");
+    print_line(f, 2, "    break;");
+    print_line(f, 2, "case %s:", build_state_nr(SUBSTATE_SIZE, state_prefix).cstr);
+    print_line(f, 2, "    if (p->bytes_left < 0) {");
+    print_line(f, 2, "        p->bytes_left = vint_length(b) - 1;");
+    print_line(f, 2, "        p->size[p->depth] = drop_first_active_bit(b);");
+    print_line(f, 2, "    } else {");
+    print_line(f, 2, "        p->size[p->depth] = 0x100 * p->size[p->depth] + b;");
+    print_line(f, 2, "    }");
+    print_line(f, 2, "    assert(p->bytes_left >= 0);");
+    print_line(f, 2, "    if (p->bytes_left == 0) {");
+    print_line(f, 2, "        p->state = %s;", build_state_nr(SUBSTATE_BODY, state_prefix).cstr);
+    print_line(f, 2, "        p->bytes_left = -1;");
+    print_line(f, 2, "    } else {");
+    print_line(f, 2, "        p->bytes_left--;");
+    print_line(f, 2, "    }");
+    print_line(f, 2, "    break;");
+    print_line(f, 2, "case %s:", build_state_nr(SUBSTATE_BODY, state_prefix).cstr);
+    print_line(f, 3, "UNIMPLEMENTED(\"%s\");", build_state_nr(SUBSTATE_BODY, state_prefix).cstr);
+    print_line(f, 0, "    }");
+    print_line(f, 0, "    return %s_OK;", state_prefix.cstr);
+    print_line(f, 0, "}");
+}
+
+void implement_eof_func(FILE *f, Short_String signature, Short_String return_prefix) {
+    print_line(f, 0, "%s {", signature.cstr);
+    print_line(f, 0, "    UNUSED(p);");
+    print_line(f, 0, "    return %s_OK;", return_prefix.cstr);
+    print_line(f, 0, "}");
+}
+
+void implement_print_func(FILE *f, Short_String signature) {
+    print_line(f, 0, "%s {", signature.cstr);
+    print_line(f, 0, "    printf(\"[INFO] Parser\\n\");");
+    print_line(f, 0, "    printf(\"[INFO]   state = %%s\\n\", state_as_string[p->state]);");
+    print_line(f, 0, "    printf(\"[INFO]   bytes_left = %%zd\\n\", p->bytes_left);");
+    print_line(f, 0, "    printf(\"[INFO]   id = [\");");
+    print_line(f, 0, "    if (p->depth > 0) {");
+    print_line(f, 0, "        printf(\"0x%%lX\", p->id[0]);");
+    print_line(f, 0, "    }");
+    print_line(f, 0, "    for (size_t i=1; i<p->depth; i++) {");
+    print_line(f, 0, "        printf(\", 0x%%lX\", p->id[i]);");
+    print_line(f, 0, "    }");
+    print_line(f, 0, "    printf(\"]\\n\");");
+    print_line(f, 0, "    printf(\"[INFO]   size = [\");");
+    print_line(f, 0, "    if (p->depth > 0) {");
+    print_line(f, 0, "        printf(\"0x%%lX\", p->size[0]);");
+    print_line(f, 0, "    }");
+    print_line(f, 0, "    for (size_t i=1; i<p->depth; i++) {");
+    print_line(f, 0, "        printf(\", 0x%%lX\", p->size[i]);");
+    print_line(f, 0, "    }");
+    print_line(f, 0, "    printf(\"]\\n\");");
+    print_line(f, 0, "}");
+}
+
 int main(void) {
     for (size_t i=0; i<sizeof(default_header)/sizeof(default_header[0]); i++) {
         append_element(process_element(default_header[i]));
@@ -629,13 +735,7 @@ int main(void) {
     }
     print_line(target_file, 0, "};");
     line();
-    print_line(target_file, 0, "typedef struct {");
-    print_line(target_file, 1,     "size_t depth;");
-    print_line(target_file, 1,     "%s state;", state_type_name.cstr);
-    print_line(target_file, 1,     "ssize_t bytes_left;");
-    print_line(target_file, 1,     "uint64_t id[%d];", MAX_STACK_SIZE);
-    print_line(target_file, 1,     "uint64_t size[%d];", MAX_STACK_SIZE);
-    print_line(target_file, 0, "} %s;", parser_type_name.cstr);
+    define_parser_type(target_file, parser_type_name, state_type_name);
     line();
     print_line(target_file, 0, "%s;", init_func_signature.cstr);
     print_line(target_file, 0, "%s;", parse_func_signature.cstr);
@@ -650,89 +750,17 @@ int main(void) {
     line();
 
     // implementation code
-    print_line(target_file, 0, "size_t vint_length(%s b) {", byte_type_name.cstr);
-    print_line(target_file, 1,     "if (b == 0) UNIMPLEMENTED(\"zero byte in vint_length\");");
-    print_line(target_file, 1,     "size_t acc = 1;");
-    print_line(target_file, 1,     "for (%s mark = 0x80; (mark & b) == 0; mark>>=1) acc++;", byte_type_name.cstr);
-    print_line(target_file, 1,     "return acc;");
-    print_line(target_file, 0, "}");
+    implement_vint_length(target_file, byte_type_name);
     line();
-    print_line(target_file, 0, "%s drop_first_active_bit(%s x) {", byte_type_name.cstr, byte_type_name.cstr);
-    print_line(target_file, 0, "    UNUSED(x);");
-    print_line(target_file, 0, "    %s mask = ~0;", byte_type_name.cstr);
-    print_line(target_file, 0, "    while (mask >= x) mask >>= 1;");
-    print_line(target_file, 0, "    return mask & x;");
-    print_line(target_file, 0, "}");
+    implement_drop_first_active_bit(target_file, byte_type_name);
     line();
-    print_line(target_file, 0, "%s {\n", init_func_signature.cstr);
-    print_line(target_file, 1,     "p->depth = 0;");
-    print_line(target_file, 1,     "p->state = %s;", build_state_nr(state_start, prefix_caps).cstr);
-    print_line(target_file, 1,     "p->bytes_left = -1;");
-    print_line(target_file, 0, "}\n");
+    implement_init_func(target_file, init_func_signature, build_state_nr(state_start, prefix_caps));
     line();
-    print_line(target_file, 0, "%s {\n", parse_func_signature.cstr);
-    print_line(target_file, 0, "    switch (p->state) {");
-    print_line(target_file, 2, "case %s:", build_state_nr(SUBSTATE_ID, prefix_caps).cstr);
-    print_line(target_file, 2, "    if (p->bytes_left < 0) {");
-    print_line(target_file, 2, "        p->bytes_left = vint_length(b) - 1;");
-    print_line(target_file, 2, "        p->id[p->depth] = 0;");
-    print_line(target_file, 2, "    }");
-    print_line(target_file, 2, "    assert(p->bytes_left >= 0);");
-    print_line(target_file, 2, "    p->id[p->depth] = 0x100 * p->id[p->depth] + b;");
-    print_line(target_file, 2, "    if (p->bytes_left == 0) {");
-    print_line(target_file, 2, "        p->state = %s;", build_state_nr(SUBSTATE_SIZE, prefix_caps).cstr);
-    print_line(target_file, 2, "        p->bytes_left = -1;");
-    print_line(target_file, 2, "    } else {");
-    print_line(target_file, 2, "        p->bytes_left--;");
-    print_line(target_file, 2, "    }");
-    print_line(target_file, 2, "    break;");
-    print_line(target_file, 2, "case %s:", build_state_nr(SUBSTATE_SIZE, prefix_caps).cstr);
-    print_line(target_file, 2, "    if (p->bytes_left < 0) {");
-    print_line(target_file, 2, "        p->bytes_left = vint_length(b) - 1;");
-    print_line(target_file, 2, "        p->size[p->depth] = drop_first_active_bit(b);");
-    print_line(target_file, 2, "    } else {");
-    print_line(target_file, 2, "        p->size[p->depth] = 0x100 * p->size[p->depth] + b;");
-    print_line(target_file, 2, "    }");
-    print_line(target_file, 2, "    assert(p->bytes_left >= 0);");
-    print_line(target_file, 2, "    if (p->bytes_left == 0) {");
-    print_line(target_file, 2, "        p->state = %s;", build_state_nr(SUBSTATE_BODY, prefix_caps).cstr);
-    print_line(target_file, 2, "        p->bytes_left = -1;");
-    print_line(target_file, 2, "    } else {");
-    print_line(target_file, 2, "        p->bytes_left--;");
-    print_line(target_file, 2, "    }");
-    print_line(target_file, 2, "    break;");
-    print_line(target_file, 2, "case %s:", build_state_nr(SUBSTATE_BODY, prefix_caps).cstr);
-    print_line(target_file, 3, "UNIMPLEMENTED(\"%s\");", build_state_nr(SUBSTATE_BODY, prefix_caps).cstr);
-    print_line(target_file, 0, "    }");
-    print_line(target_file, 0, "    return %s_OK;", prefix_caps.cstr);
-    print_line(target_file, 0, "}");
+    implement_parse_func(target_file, parse_func_signature, prefix_caps);
     line();
-    print_line(target_file, 0, "%s {", eof_func_signature.cstr);
-    print_line(target_file, 0, "    UNUSED(p);");
-    print_line(target_file, 0, "    return %s_OK;", prefix_caps.cstr);
-    print_line(target_file, 0, "}");
+    implement_eof_func(target_file, eof_func_signature, prefix_caps);
     line();
-    print_line(target_file, 0, "%s {", print_func_signature.cstr);
-    print_line(target_file, 0, "    printf(\"[INFO] Parser\\n\");");
-    print_line(target_file, 0, "    printf(\"[INFO]   state = %%s\\n\", state_as_string[p->state]);");
-    print_line(target_file, 0, "    printf(\"[INFO]   bytes_left = %%zd\\n\", p->bytes_left);");
-    print_line(target_file, 0, "    printf(\"[INFO]   id = [\");");
-    print_line(target_file, 0, "    if (p->depth > 0) {");
-    print_line(target_file, 0, "        printf(\"0x%%lX\", p->id[0]);");
-    print_line(target_file, 0, "    }");
-    print_line(target_file, 0, "    for (size_t i=1; i<p->depth; i++) {");
-    print_line(target_file, 0, "        printf(\", 0x%%lX\", p->id[i]);");
-    print_line(target_file, 0, "    }");
-    print_line(target_file, 0, "    printf(\"]\\n\");");
-    print_line(target_file, 0, "    printf(\"[INFO]   size = [\");");
-    print_line(target_file, 0, "    if (p->depth > 0) {");
-    print_line(target_file, 0, "        printf(\"0x%%lX\", p->size[0]);");
-    print_line(target_file, 0, "    }");
-    print_line(target_file, 0, "    for (size_t i=1; i<p->depth; i++) {");
-    print_line(target_file, 0, "        printf(\", 0x%%lX\", p->size[i]);");
-    print_line(target_file, 0, "    }");
-    print_line(target_file, 0, "    printf(\"]\\n\");");
-    print_line(target_file, 0, "}");
+    implement_print_func(target_file, print_func_signature);
 
     line();
     print_line(target_file, 0, "#endif // %s", implementation_guard.cstr);
