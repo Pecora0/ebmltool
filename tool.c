@@ -158,29 +158,14 @@ Pre_EBML_Element default_header[] = {
         .range = {">=4"},
         .type  = {"uinteger"},
     },
+    {
+        .name  = {"EBMLMaxSizeLength"},
+        .path  = {"\\EBML\\EBMLMaxSizeLength"},
+        .id    = {"0x42F3"},
+        .range = {"not 0"},
+        .type  = {"uinteger"},
+    },
 /*
-   name:  EBMLMaxSizeLength
-
-   path:  "\EBML\EBMLMaxSizeLength"
-
-   id:  0x42F3
-
-   range:  not 0
-
-   default:  8
-
-   type:  Unsigned Integer
-
-   description:  The EBMLMaxSizeLength Element stores the maximum
-      permitted length in octets of the expressions of all Element Data
-      Sizes to be found within the EBML Body.  The EBMLMaxSizeLength
-      Element documents an upper bound for the "length" of all Element
-      Data Size expressions within the EBML Body and not an upper bound
-      for the "value" of all Element Data Size expressions within the
-      EBML Body.  EBML Elements that have an Element Data Size
-      expression that is larger in octets than what is expressed by
-      EBMLMaxSizeLength Element are invalid.
-
     {
 
    name:  DocType
@@ -293,15 +278,17 @@ size_t element_count = 0;
 
 EBML_Range parse_range(Short_String str) {
     uint64_t acc = 0;
-    bool exclusion = false;
+    EBML_Range result = {
+        .kind = RANGE_NONE,
+    };
     for (size_t i=0; i<SHORT_STRING_LENGTH; i++) {
         char c = str.cstr[i];
         if (c == '\0') {
-            EBML_Range result;
             if (i == 0) {
-                result.kind = RANGE_NONE;
-            } else {
-                result.kind = exclusion ? RANGE_EXCLUDED : RANGE_EXACT;
+                return result;
+            }
+            if (result.kind == RANGE_NONE) result.kind = RANGE_EXACT;
+            if (result.kind == RANGE_EXACT || result.kind == RANGE_EXCLUDED) {
                 result.lo = acc;
                 result.hi = acc;
             }
@@ -313,8 +300,14 @@ EBML_Range parse_range(Short_String str) {
             assert(str.cstr[1] == 'o');
             assert(str.cstr[2] == 't');
             assert(str.cstr[3] == ' ');
-            exclusion = true;
+            result.kind = RANGE_EXCLUDED;
             i = 3;
+        } else if (c == '>') {
+            assert(i == 0);
+            assert(str.cstr[1] == '=');
+            result.kind = RANGE_LOWER_BOUND;
+            result.lo_in = true;
+            i = 1;
         } else {
             printf("[ERROR] got character %c\n", c);
             UNIMPLEMENTED("parse_range");
