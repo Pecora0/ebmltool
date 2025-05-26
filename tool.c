@@ -483,11 +483,15 @@ const char *substate_as_string[] = {
     [SUBSTATE_SIZE]  = "SIZE",
     [SUBSTATE_BODY]  = "BODY",
 };
-const size_t state_start = 0;
+const size_t state_start = SUBSTATE_BODY;
 
-Short_String build_state_nr(Substate state, Short_String pre) {
+#define MAX_STACK_SIZE 8
+Short_String prefix      = {TARGET_LIBRARY_NAME};
+#define PREFIX_CAPS capitalize(prefix)
+
+Short_String build_state_nr(Substate state) {
     assert(state < SUBSTATE_COUNT);
-    return shortf("%s_%s", pre.cstr, substate_as_string[state]);
+    return shortf("%s_%s", PREFIX_CAPS.cstr, substate_as_string[state]);
 }
 
 uint64_t first_byte(uint64_t x) {
@@ -495,15 +499,17 @@ uint64_t first_byte(uint64_t x) {
     return x;
 }
 
-#define MAX_STACK_SIZE 8
-
 void define_parser_type(FILE *f, Short_String parser_type_name, Short_String state_type_name) {
     print_line(f, 0, "typedef struct {");
+    print_line(f, 1,     "size_t offset;");
     print_line(f, 1,     "size_t depth;");
     print_line(f, 1,     "%s state;", state_type_name.cstr);
-    print_line(f, 1,     "ssize_t bytes_left;");
+    print_line(f, 1,     "size_t id_offset[%d];", MAX_STACK_SIZE);
+    print_line(f, 1,     "size_t size_offset[%d];", MAX_STACK_SIZE);
+    print_line(f, 1,     "size_t body_offset[%d];", MAX_STACK_SIZE);
     print_line(f, 1,     "uint64_t id[%d];", MAX_STACK_SIZE);
     print_line(f, 1,     "uint64_t size[%d];", MAX_STACK_SIZE);
+    print_line(f, 1,     "uint64_t value;");
     print_line(f, 0, "} %s;", parser_type_name.cstr);
 }
 
@@ -525,48 +531,93 @@ void implement_drop_first_active_bit(FILE *f, Short_String byte_type_name) {
     print_line(f, 0, "}");
 }
 
+void implement_type(FILE *f, Short_String parser_type_name) {
+    print_line(f, 0, "int type(%s *p) {", parser_type_name.cstr);
+    print_line(f, 0, "    if (p->depth == 0) return %d;", MASTER);
+    print_line(f, 0, "    uint64_t id = p->id[p->depth];");
+    print_line(f, 0, "    switch (id) {");
+    for (size_t i=0; i<element_count; i++) {
+        print_line(f, 2, "case 0x%lX: return %d;", element_list[i].id, element_list[i].type);
+    }
+    print_line(f, 0, "    }");
+    print_line(f, 0, "    UNREACHABLE(\"type: unknown id\");");
+    print_line(f, 0, "}");
+}
+
 void implement_init_func(FILE *f, Short_String signature, Short_String state) {
     print_line(f, 0, "%s {\n", signature.cstr);
+    print_line(f, 1,     "p->offset = -1;");
     print_line(f, 1,     "p->depth = 0;");
     print_line(f, 1,     "p->state = %s;", state.cstr);
-    print_line(f, 1,     "p->bytes_left = -1;");
+    print_line(f, 1,     "for (size_t i=0; i<%d; i++) {", MAX_STACK_SIZE);
+    print_line(f, 1,     "    p->id_offset[i] = -1;");
+    print_line(f, 1,     "    p->size_offset[i] = -1;");
+    print_line(f, 1,     "    p->body_offset[i] = -1;");
+    print_line(f, 1,     "}");
+    print_line(f, 1,     "p->body_offset[0] = 0;");
+    print_line(f, 1,     "p->value = 0;");
     print_line(f, 0, "}\n");
 }
 
 void implement_parse_func(FILE *f, Short_String signature, Short_String state_prefix) {
     print_line(f, 0, "%s {\n", signature.cstr);
+    print_line(f, 0, "    p->offset++;");
     print_line(f, 0, "    switch (p->state) {");
-    print_line(f, 2, "case %s:", build_state_nr(SUBSTATE_ID, state_prefix).cstr);
-    print_line(f, 2, "    if (p->bytes_left < 0) {");
-    print_line(f, 2, "        p->bytes_left = vint_length(b) - 1;");
+    print_line(f, 2, "case %s:", build_state_nr(SUBSTATE_ID).cstr);
+    print_line(f, 2, "    if (p->offset < p->id_offset[p->depth]) {");
+    print_line(f, 2, "        p->id_offset[p->depth]   = p->offset;");
+    print_line(f, 2, "        p->size_offset[p->depth] = p->offset + vint_length(b);");
     print_line(f, 2, "        p->id[p->depth] = 0;");
     print_line(f, 2, "    }");
-    print_line(f, 2, "    assert(p->bytes_left >= 0);");
+    print_line(f, 2, "    assert(p->offset < p->size_offset[p->depth]);");
     print_line(f, 2, "    p->id[p->depth] = 0x100 * p->id[p->depth] + b;");
-    print_line(f, 2, "    if (p->bytes_left == 0) {");
-    print_line(f, 2, "        p->state = %s;", build_state_nr(SUBSTATE_SIZE, state_prefix).cstr);
-    print_line(f, 2, "        p->bytes_left = -1;");
-    print_line(f, 2, "    } else {");
-    print_line(f, 2, "        p->bytes_left--;");
+    print_line(f, 2, "    if (p->offset + 1 == p->size_offset[p->depth]) {");
+    print_line(f, 2, "        p->state = %s;", build_state_nr(SUBSTATE_SIZE).cstr);
     print_line(f, 2, "    }");
     print_line(f, 2, "    break;");
-    print_line(f, 2, "case %s:", build_state_nr(SUBSTATE_SIZE, state_prefix).cstr);
-    print_line(f, 2, "    if (p->bytes_left < 0) {");
-    print_line(f, 2, "        p->bytes_left = vint_length(b) - 1;");
+    print_line(f, 2, "case %s:", build_state_nr(SUBSTATE_SIZE).cstr);
+    print_line(f, 2, "    if (p->size_offset[p->depth] == p->offset) {");
+    print_line(f, 2, "        p->body_offset[p->depth] = p->offset + vint_length(b);");
     print_line(f, 2, "        p->size[p->depth] = drop_first_active_bit(b);");
-    print_line(f, 2, "    } else {");
+    print_line(f, 2, "    } else if (p->size_offset[p->depth] < p->offset) {");
     print_line(f, 2, "        p->size[p->depth] = 0x100 * p->size[p->depth] + b;");
-    print_line(f, 2, "    }");
-    print_line(f, 2, "    assert(p->bytes_left >= 0);");
-    print_line(f, 2, "    if (p->bytes_left == 0) {");
-    print_line(f, 2, "        p->state = %s;", build_state_nr(SUBSTATE_BODY, state_prefix).cstr);
-    print_line(f, 2, "        p->bytes_left = -1;");
     print_line(f, 2, "    } else {");
-    print_line(f, 2, "        p->bytes_left--;");
+    print_line(f, 2, "        UNREACHABLE(\"size offset is bigger than current offset\");");
+    print_line(f, 2, "    }");
+    print_line(f, 2, "    assert(p->body_offset[p->depth] > p->offset);");
+    print_line(f, 2, "    if (p->body_offset[p->depth] == p->offset + 1) {");
+    print_line(f, 2, "        p->state = %s;", build_state_nr(SUBSTATE_BODY).cstr);
     print_line(f, 2, "    }");
     print_line(f, 2, "    break;");
-    print_line(f, 2, "case %s:", build_state_nr(SUBSTATE_BODY, state_prefix).cstr);
-    print_line(f, 3, "UNIMPLEMENTED(\"%s\");", build_state_nr(SUBSTATE_BODY, state_prefix).cstr);
+    print_line(f, 2, "case %s:", build_state_nr(SUBSTATE_BODY).cstr);
+    print_line(f, 2, "    switch (type(p)) {");
+    print_line(f, 2, "        case %d:", MASTER);
+    print_line(f, 2, "            assert(p->body_offset[p->depth] == p->offset);");
+    print_line(f, 2, "            p->depth++;");
+    print_line(f, 2, "            p->state = %s;", build_state_nr(SUBSTATE_ID).cstr);
+    print_line(f, 2, "            p->id_offset[p->depth]   = p->offset;");
+    print_line(f, 2, "            p->size_offset[p->depth] = p->offset + vint_length(b);");
+    print_line(f, 2, "            p->id[p->depth] = b;");
+    print_line(f, 2, "            break;");
+    print_line(f, 2, "        case %d:", UINTEGER);
+    print_line(f, 2, "            assert(p->size[p->depth] > 0);");
+    print_line(f, 2, "            if (p->offset == p->body_offset[p->depth]) {");
+    print_line(f, 2, "                assert(p->size[p->depth] <= 8);");
+    print_line(f, 2, "                p->value = b;");
+    print_line(f, 2, "            } else if (p->offset < p->body_offset[p->depth] + p->size[p->depth]) {");
+    print_line(f, 2, "                UNIMPLEMENTED(\"%s for type UINTEGER at inner byte\");", build_state_nr(SUBSTATE_BODY).cstr);
+    print_line(f, 2, "            } else if (p->offset == p->body_offset[p->depth] + p->size[p->depth]) {");
+    print_line(f, 2, "                p->state = %s;", build_state_nr(SUBSTATE_ID).cstr);
+    print_line(f, 2, "                p->id_offset[p->depth]   = p->offset;");
+    print_line(f, 2, "                p->size_offset[p->depth] = p->offset + vint_length(b);");
+    print_line(f, 2, "                p->id[p->depth] = b;");
+    print_line(f, 2, "            } else {");
+    print_line(f, 2, "                UNIMPLEMENTED(\"%s for type UINTEGER\");", build_state_nr(SUBSTATE_BODY).cstr);
+    print_line(f, 2, "            }");
+    print_line(f, 2, "            break;");
+    print_line(f, 2, "        default:");
+    print_line(f, 2, "            UNIMPLEMENTED(\"%s\");", build_state_nr(SUBSTATE_BODY).cstr);
+    print_line(f, 2, "    }");
     print_line(f, 0, "    }");
     print_line(f, 0, "    return %s_OK;", state_prefix.cstr);
     print_line(f, 0, "}");
@@ -582,24 +633,39 @@ void implement_eof_func(FILE *f, Short_String signature, Short_String return_pre
 void implement_print_func(FILE *f, Short_String signature) {
     print_line(f, 0, "%s {", signature.cstr);
     print_line(f, 0, "    printf(\"[INFO] Parser\\n\");");
+    print_line(f, 0, "    printf(\"[INFO]   offset = %%zu\\n\", p->offset);");
     print_line(f, 0, "    printf(\"[INFO]   state = %%s\\n\", state_as_string[p->state]);");
-    print_line(f, 0, "    printf(\"[INFO]   bytes_left = %%zd\\n\", p->bytes_left);");
-    print_line(f, 0, "    printf(\"[INFO]   id = [\");");
-    print_line(f, 0, "    if (p->depth > 0) {");
-    print_line(f, 0, "        printf(\"0x%%lX\", p->id[0]);");
+    print_line(f, 0, "    printf(\"[INFO]   id_offset   = [\");");
+    print_line(f, 0, "    printf(\"%%zu\", p->id_offset[0]);");
+    print_line(f, 0, "    for (size_t i=1; i<=p->depth; i++) {");
+    print_line(f, 0, "        printf(\", %%zu\", p->id_offset[i]);");
     print_line(f, 0, "    }");
-    print_line(f, 0, "    for (size_t i=1; i<p->depth; i++) {");
+    print_line(f, 0, "    printf(\"]\\n\");");
+    print_line(f, 0, "    printf(\"[INFO]   size_offset = [\");");
+    print_line(f, 0, "    printf(\"%%zu\", p->size_offset[0]);");
+    print_line(f, 0, "    for (size_t i=1; i<=p->depth; i++) {");
+    print_line(f, 0, "        printf(\", %%zu\", p->size_offset[i]);");
+    print_line(f, 0, "    }");
+    print_line(f, 0, "    printf(\"]\\n\");");
+    print_line(f, 0, "    printf(\"[INFO]   body_offset = [\");");
+    print_line(f, 0, "    printf(\"%%zu\", p->body_offset[0]);");
+    print_line(f, 0, "    for (size_t i=1; i<=p->depth; i++) {");
+    print_line(f, 0, "        printf(\", %%zu\", p->body_offset[i]);");
+    print_line(f, 0, "    }");
+    print_line(f, 0, "    printf(\"]\\n\");");
+    print_line(f, 0, "    printf(\"[INFO]   id = [\");");
+    print_line(f, 0, "    printf(\"0x%%lX\", p->id[0]);");
+    print_line(f, 0, "    for (size_t i=1; i<=p->depth; i++) {");
     print_line(f, 0, "        printf(\", 0x%%lX\", p->id[i]);");
     print_line(f, 0, "    }");
     print_line(f, 0, "    printf(\"]\\n\");");
     print_line(f, 0, "    printf(\"[INFO]   size = [\");");
-    print_line(f, 0, "    if (p->depth > 0) {");
-    print_line(f, 0, "        printf(\"0x%%lX\", p->size[0]);");
-    print_line(f, 0, "    }");
-    print_line(f, 0, "    for (size_t i=1; i<p->depth; i++) {");
+    print_line(f, 0, "    printf(\"0x%%lX\", p->size[0]);");
+    print_line(f, 0, "    for (size_t i=1; i<=p->depth; i++) {");
     print_line(f, 0, "        printf(\", 0x%%lX\", p->size[i]);");
     print_line(f, 0, "    }");
     print_line(f, 0, "    printf(\"]\\n\");");
+    print_line(f, 0, "    printf(\"[INFO]   value = %%lu\\n\", p->value);");
     print_line(f, 0, "}");
 }
 
@@ -688,8 +754,6 @@ int main(void) {
     Short_String target_file_name     = shortf("build/%s.h", TARGET_LIBRARY_NAME);
     Short_String include_guard        = capitalize(shortf("%s_H", TARGET_LIBRARY_NAME));
     Short_String implementation_guard = capitalize(shortf("%s_IMPLEMENTATION", TARGET_LIBRARY_NAME));
-    Short_String prefix               = shortf(TARGET_LIBRARY_NAME);
-    Short_String prefix_caps          = capitalize(prefix);
     Short_String byte_type_name       = shortf("%s_byte_t", prefix.cstr);
     Short_String parser_type_name     = shortf("%s_parser_t", prefix.cstr);
     Short_String return_type_name     = shortf("%s_return_t", prefix.cstr);
@@ -720,18 +784,18 @@ int main(void) {
     print_line(target_file, 0, "typedef unsigned char %s;", byte_type_name.cstr);
     line();
     print_line(target_file, 0, "typedef enum {");
-    print_line(target_file, 1,     "%s_OK = 0,", prefix_caps.cstr);
+    print_line(target_file, 1,     "%s_OK = 0,", PREFIX_CAPS.cstr);
     print_line(target_file, 0, "} %s;", return_type_name.cstr);
     line();
     print_line(target_file, 0, "typedef enum {");
     for (Substate j=0; j<SUBSTATE_COUNT; j++) {
-        print_line(target_file, 1, "%s,", build_state_nr(j, prefix_caps).cstr);
+        print_line(target_file, 1, "%s,", build_state_nr(j).cstr);
     }
     print_line(target_file, 0, "} %s;", state_type_name.cstr);
     line();
     print_line(target_file, 0, "const char *state_as_string[] = {");
     for (Substate j=0; j<SUBSTATE_COUNT; j++) {
-        print_line(target_file, 1, "[%s] = \"%s\",", build_state_nr(j, prefix_caps).cstr, build_state_nr(j, prefix_caps).cstr);
+        print_line(target_file, 1, "[%s] = \"%s\",", build_state_nr(j).cstr, build_state_nr(j).cstr);
     }
     print_line(target_file, 0, "};");
     line();
@@ -754,11 +818,13 @@ int main(void) {
     line();
     implement_drop_first_active_bit(target_file, byte_type_name);
     line();
-    implement_init_func(target_file, init_func_signature, build_state_nr(state_start, prefix_caps));
+    implement_type(target_file, parser_type_name);
     line();
-    implement_parse_func(target_file, parse_func_signature, prefix_caps);
+    implement_init_func(target_file, init_func_signature, build_state_nr(state_start));
     line();
-    implement_eof_func(target_file, eof_func_signature, prefix_caps);
+    implement_parse_func(target_file, parse_func_signature, PREFIX_CAPS);
+    line();
+    implement_eof_func(target_file, eof_func_signature, PREFIX_CAPS);
     line();
     implement_print_func(target_file, print_func_signature);
 
