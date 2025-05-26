@@ -32,12 +32,21 @@ int main(int argc, char **argv) {
         switch (r) {
             case LIBEXAMPLE_OK:
                 break;
+            case LIBEXAMPLE_ELEMSTART:
+                printf("[INFO] got return value 'ELEMSTART'\n");
+                libexample_print(&parser);
+                break;
+            case LIBEXAMPLE_ELEMEND:
+                printf("[INFO] got return value 'ELEMEND'\n");
+                libexample_print(&parser);
+                break;
         }
-        libexample_print(&parser);
     }
     libexample_return_t r = libexample_eof(&parser);
     switch (r) {
         case LIBEXAMPLE_OK:
+        case LIBEXAMPLE_ELEMSTART:
+        case LIBEXAMPLE_ELEMEND:
             break;
     }
 

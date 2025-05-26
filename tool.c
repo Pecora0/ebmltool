@@ -144,7 +144,6 @@ Pre_EBML_Element default_header[] = {
         .type  = {"uinteger"},
         .range = {"not 0"},
     },
-
     {
         .name  = {"EBMLReadVersion"},
         .path  = {"\\EBML\\EBMLReadVersion"},
@@ -152,28 +151,14 @@ Pre_EBML_Element default_header[] = {
         .range = {"1"},
         .type  = {"uinteger"},
     },
+    {
+        .name  = {"EBMLMaxIDLength"},
+        .path  = {"\\EBML\\EBMLMaxIDLength"},
+        .id    = {"0x42F2"},
+        .range = {">=4"},
+        .type  = {"uinteger"},
+    },
 /*
-    {
-
-   name:  EBMLMaxIDLength
-
-   path:  "\EBML\EBMLMaxIDLength"
-
-   id:  0x42F2
-
-   range:  >=4
-
-   default:  4
-
-   type:  Unsigned Integer
-
-   description:  The EBMLMaxIDLength Element stores the maximum
-      permitted length in octets of the Element IDs to be found within
-      the EBML Body.  An EBMLMaxIDLength Element value of four is
-      RECOMMENDED, though larger values are allowed.
-
-    {
-
    name:  EBMLMaxSizeLength
 
    path:  "\EBML\EBMLMaxSizeLength"
@@ -587,30 +572,35 @@ void implement_parse_func(FILE *f, Short_String signature, Short_String state_pr
     print_line(f, 2, "    assert(p->body_offset[p->depth] > p->offset);");
     print_line(f, 2, "    if (p->body_offset[p->depth] == p->offset + 1) {");
     print_line(f, 2, "        p->state = %s;", build_state_nr(SUBSTATE_BODY).cstr);
+    print_line(f, 2, "        return %s_ELEMSTART;", state_prefix.cstr);
     print_line(f, 2, "    }");
     print_line(f, 2, "    break;");
     print_line(f, 2, "case %s:", build_state_nr(SUBSTATE_BODY).cstr);
     print_line(f, 2, "    switch (type(p)) {");
     print_line(f, 2, "        case %d:", MASTER);
-    print_line(f, 2, "            assert(p->body_offset[p->depth] == p->offset);");
-    print_line(f, 2, "            p->depth++;");
-    print_line(f, 2, "            p->state = %s;", build_state_nr(SUBSTATE_ID).cstr);
-    print_line(f, 2, "            p->id_offset[p->depth]   = p->offset;");
-    print_line(f, 2, "            p->size_offset[p->depth] = p->offset + vint_length(b);");
-    print_line(f, 2, "            p->id[p->depth] = b;");
+    print_line(f, 2, "            if (p->offset < p->body_offset[p->depth] + p->size[p->depth]) {");
+    print_line(f, 2, "                p->depth++;");
+    print_line(f, 2, "                p->state = %s;", build_state_nr(SUBSTATE_ID).cstr);
+    print_line(f, 2, "                p->id_offset[p->depth]   = p->offset;");
+    print_line(f, 2, "                p->size_offset[p->depth] = p->offset + vint_length(b);");
+    print_line(f, 2, "                p->id[p->depth] = b;");
+    print_line(f, 2, "            } else {");
+    print_line(f, 2, "                UNIMPLEMENTED(\"%s for type MASTER\");", build_state_nr(SUBSTATE_BODY).cstr);
+    print_line(f, 2, "            }");
     print_line(f, 2, "            break;");
     print_line(f, 2, "        case %d:", UINTEGER);
     print_line(f, 2, "            assert(p->size[p->depth] > 0);");
     print_line(f, 2, "            if (p->offset == p->body_offset[p->depth]) {");
     print_line(f, 2, "                assert(p->size[p->depth] <= 8);");
-    print_line(f, 2, "                p->value = b;");
-    print_line(f, 2, "            } else if (p->offset < p->body_offset[p->depth] + p->size[p->depth]) {");
+    print_line(f, 2, "                p->value = 0;");
+    print_line(f, 2, "            }");
+    print_line(f, 2, "            if (p->offset + 1 < p->body_offset[p->depth] + p->size[p->depth]) {");
     print_line(f, 2, "                UNIMPLEMENTED(\"%s for type UINTEGER at inner byte\");", build_state_nr(SUBSTATE_BODY).cstr);
-    print_line(f, 2, "            } else if (p->offset == p->body_offset[p->depth] + p->size[p->depth]) {");
-    print_line(f, 2, "                p->state = %s;", build_state_nr(SUBSTATE_ID).cstr);
-    print_line(f, 2, "                p->id_offset[p->depth]   = p->offset;");
-    print_line(f, 2, "                p->size_offset[p->depth] = p->offset + vint_length(b);");
-    print_line(f, 2, "                p->id[p->depth] = b;");
+    print_line(f, 2, "            } else if (p->offset + 1 == p->body_offset[p->depth] + p->size[p->depth]) {");
+    print_line(f, 2, "                p->value = 0x80 * p->value + b;");
+    print_line(f, 2, "                p->state = %s;", build_state_nr(SUBSTATE_BODY).cstr);
+    print_line(f, 2, "                p->depth--;");
+    print_line(f, 2, "                return %s_ELEMEND;", state_prefix.cstr);
     print_line(f, 2, "            } else {");
     print_line(f, 2, "                UNIMPLEMENTED(\"%s for type UINTEGER\");", build_state_nr(SUBSTATE_BODY).cstr);
     print_line(f, 2, "            }");
@@ -634,6 +624,7 @@ void implement_print_func(FILE *f, Short_String signature) {
     print_line(f, 0, "%s {", signature.cstr);
     print_line(f, 0, "    printf(\"[INFO] Parser\\n\");");
     print_line(f, 0, "    printf(\"[INFO]   offset = %%zu\\n\", p->offset);");
+    print_line(f, 0, "    printf(\"[INFO]   depth = %%zu\\n\", p->depth);");
     print_line(f, 0, "    printf(\"[INFO]   state = %%s\\n\", state_as_string[p->state]);");
     print_line(f, 0, "    printf(\"[INFO]   id_offset   = [\");");
     print_line(f, 0, "    printf(\"%%zu\", p->id_offset[0]);");
@@ -785,6 +776,8 @@ int main(void) {
     line();
     print_line(target_file, 0, "typedef enum {");
     print_line(target_file, 1,     "%s_OK = 0,", PREFIX_CAPS.cstr);
+    print_line(target_file, 1,     "%s_ELEMSTART,", PREFIX_CAPS.cstr);
+    print_line(target_file, 1,     "%s_ELEMEND,", PREFIX_CAPS.cstr);
     print_line(target_file, 0, "} %s;", return_type_name.cstr);
     line();
     print_line(target_file, 0, "typedef enum {");
