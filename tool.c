@@ -96,7 +96,18 @@ typedef enum {
     STRING,
     DATE,
     BINARY,
+    EBML_TYPE_COUNT,
 } EBML_Type;
+
+const char *ebml_type_spelling[] = {
+    [MASTER]   = "master",
+    [UINTEGER] = "uinteger",
+    [UTF_8]    = "utf-8",
+    [STRING]   = "string",
+    [DATE]     = "date",
+    [BINARY]   = "binary",
+};
+static_assert(EBML_TYPE_COUNT == sizeof(ebml_type_spelling)/sizeof(ebml_type_spelling[0]));
 
 typedef enum {
     RANGE_NONE,
@@ -166,48 +177,26 @@ Pre_EBML_Element default_header[] = {
         .type  = {"uinteger"},
     },
     {
-        .name =  {"DocType"},
-        .path =  {"\\EBML\\DocType"},
-        .id   =  {"0x4282"},
-        .type =  {"string"},
+        .name = {"DocType"},
+        .path = {"\\EBML\\DocType"},
+        .id   = {"0x4282"},
+        .type = {"string"},
+    },
+    {
+        .name  = {"DocTypeVersion"},
+        .path  = {"\\EBML\\DocTypeVersion"},
+        .id    = {"0x4287"},
+        .range = {"not 0"},
+        .type  = {"uinteger"},
+    },
+    {
+        .name  = {"DocTypeReadVersion"},
+        .path  = {"\\EBML\\DocTypeReadVersion"},
+        .id    = {"0x4285"},
+        .range = {"not 0"},
+        .type  = {"uinteger"},
     },
 /*
-    {
-
-   name:  DocTypeVersion
-
-   path:  "\EBML\DocTypeVersion"
-
-   id:  0x4287
-
-   range:  not 0
-
-   default:  1
-
-   type:  Unsigned Integer
-
-   description:  The version of DocType interpreter used to create the
-      EBML Document.
-
-    {
-
-   name:  DocTypeReadVersion
-
-   path:  "\EBML\DocTypeReadVersion"
-
-   id:  0x4285
-
-   range:  not 0
-
-   default:  1
-
-   type:  Unsigned Integer
-
-   description:  The minimum DocType version an EBML Reader has to
-      support to read this EBML Document.  The value of the
-      DocTypeReadVersion Element MUST be less than or equal to the value
-      of the DocTypeVersion Element.
-
     {
 
    name:  DocTypeExtension
@@ -378,6 +367,14 @@ size_t upper_bound(EBML_Range r) {
     UNREACHABLE("no Range_Kind matched");
 }
 
+EBML_Type parse_type(Short_String type) {
+    for (EBML_Type i=0; i<EBML_TYPE_COUNT; i++) {
+        if (strcmp(type.cstr, ebml_type_spelling[i]) == 0) return i;
+    }
+    printf("[ERROR] Unknown type '%s'\n", type.cstr);
+    exit(1);
+}
+
 EBML_Element process_element(Pre_EBML_Element elem) {
     EBML_Element result = {
         .name = elem.name,
@@ -388,22 +385,7 @@ EBML_Element process_element(Pre_EBML_Element elem) {
         printf("[ERROR] Could not parse id '%s': %s\n", elem.id.cstr, strerror(errno));
         UNIMPLEMENTED("proper id representation");
     }
-    if (strcmp(elem.type.cstr, "master") == 0) {
-        result.type = MASTER;
-    } else if (strcmp(elem.type.cstr, "uinteger") == 0) {
-        result.type = UINTEGER;
-    } else if (strcmp(elem.type.cstr, "utf-8") == 0) {
-        result.type = UTF_8;
-    } else if (strcmp(elem.type.cstr, "string") == 0) {
-        result.type = STRING;
-    } else if (strcmp(elem.type.cstr, "date") == 0) {
-        result.type = DATE;
-    } else if (strcmp(elem.type.cstr, "binary") == 0) {
-        result.type = BINARY;
-    } else {
-        printf("[ERROR] Unknown type '%s' in element '%s'\n", elem.type.cstr, elem.name.cstr);
-        exit(1);
-    }
+    result.type = parse_type(elem.type);
     result.range = parse_range(elem.range);
     return result;
 }
@@ -471,6 +453,7 @@ uint64_t first_byte(uint64_t x) {
 
 void define_parser_type(FILE *f, Short_String parser_type_name, Short_String state_type_name) {
     print_line(f, 0, "typedef struct {");
+    // fields meant for internal usage, the library user should not be concerned about them
     print_line(f, 1,     "size_t offset;");
     print_line(f, 1,     "size_t depth;");
     print_line(f, 1,     "%s state;", state_type_name.cstr);
@@ -479,6 +462,9 @@ void define_parser_type(FILE *f, Short_String parser_type_name, Short_String sta
     print_line(f, 1,     "size_t body_offset[%d];", MAX_STACK_SIZE);
     print_line(f, 1,     "uint64_t id[%d];", MAX_STACK_SIZE);
     print_line(f, 1,     "uint64_t size[%d];", MAX_STACK_SIZE);
+    // fields meant for the user to extract information
+    print_line(f, 1,     "char *name;");
+    print_line(f, 1,     "size_t type;");
     print_line(f, 1,     "uint64_t value;");
     print_line(f, 1,     "size_t string_length;");
     print_line(f, 1,     "char string_buffer[%d];", STRING_BUFFER_SIZE);
@@ -510,6 +496,19 @@ void implement_type(FILE *f, Short_String parser_type_name) {
     print_line(f, 0, "    switch (id) {");
     for (size_t i=0; i<element_count; i++) {
         print_line(f, 2, "case 0x%lX: return %d;", element_list[i].id, element_list[i].type);
+    }
+    print_line(f, 0, "    }");
+    print_line(f, 0, "    UNREACHABLE(\"type: unknown id\");");
+    print_line(f, 0, "}");
+}
+
+void implement_name(FILE *f, Short_String parser_type_name) {
+    print_line(f, 0, "char *name(%s *p) {", parser_type_name.cstr);
+    print_line(f, 0, "    assert(p->depth > 0);");
+    print_line(f, 0, "    uint64_t id = p->id[p->depth];");
+    print_line(f, 0, "    switch (id) {");
+    for (size_t i=0; i<element_count; i++) {
+        print_line(f, 2, "case 0x%lX: return \"%s\";", element_list[i].id, element_list[i].name.cstr);
     }
     print_line(f, 0, "    }");
     print_line(f, 0, "    UNREACHABLE(\"type: unknown id\");");
@@ -560,13 +559,15 @@ void implement_parse_func(FILE *f, Short_String signature, Short_String state_pr
     print_line(f, 2, "    assert(p->body_offset[p->depth] > p->offset);");
     print_line(f, 2, "    if (p->body_offset[p->depth] == p->offset + 1) {");
     print_line(f, 2, "        p->state = %s;", build_state_nr(SUBSTATE_BODY).cstr);
+    print_line(f, 2, "        p->name = name(p);");
+    print_line(f, 2, "        p->type = type(p);"); 
     print_line(f, 2, "        return %s_ELEMSTART;", state_prefix.cstr);
     print_line(f, 2, "    }");
     print_line(f, 2, "    break;");
     print_line(f, 2, "case %s:", build_state_nr(SUBSTATE_BODY).cstr);
     print_line(f, 2, "    switch (type(p)) {");
     print_line(f, 2, "        case %d:", MASTER);
-    print_line(f, 2, "            if (p->offset < p->body_offset[p->depth] + p->size[p->depth]) {");
+    print_line(f, 2, "            if (p->depth == 0 || p->offset < p->body_offset[p->depth] + p->size[p->depth]) {");
     print_line(f, 2, "                p->depth++;");
     print_line(f, 2, "                p->state = %s;", build_state_nr(SUBSTATE_ID).cstr);
     print_line(f, 2, "                p->id_offset[p->depth]   = p->offset;");
@@ -799,6 +800,12 @@ int main(void) {
     }
     print_line(target_file, 0, "};");
     line();
+    print_line(target_file, 0, "char *type_as_string[] = {");
+    for (EBML_Type i=0; i<EBML_TYPE_COUNT; i++) {
+        print_line(target_file, 1, "[%d] = \"%s\",", i, ebml_type_spelling[i]);
+    }
+    print_line(target_file, 0, "};");
+    line();
     define_parser_type(target_file, parser_type_name, state_type_name);
     line();
     print_line(target_file, 0, "%s;", init_func_signature.cstr);
@@ -819,6 +826,8 @@ int main(void) {
     implement_drop_first_active_bit(target_file, byte_type_name);
     line();
     implement_type(target_file, parser_type_name);
+    line();
+    implement_name(target_file, parser_type_name);
     line();
     implement_init_func(target_file, init_func_signature, build_state_nr(state_start));
     line();

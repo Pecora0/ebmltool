@@ -25,20 +25,17 @@ int main(int argc, char **argv) {
     libexample_parser_t parser;
     libexample_init(&parser);
 
-    libexample_print(&parser);
+    //libexample_print(&parser);
     for (int c = fgetc(src_file); c != EOF; c = fgetc(src_file)) {
-        printf("[INFO] read byte 0x%X\n", c);
+        // printf("[INFO] read byte 0x%X\n", c);
         libexample_return_t r = libexample_parse(&parser, (libexample_byte_t) c);
         switch (r) {
             case LIBEXAMPLE_OK:
                 break;
             case LIBEXAMPLE_ELEMSTART:
-                printf("[INFO] got return value 'ELEMSTART'\n");
-                libexample_print(&parser);
+                printf("[INFO] got element '%s' (0x%lX) of type '%s' and size %ld\n", parser.name, parser.id[parser.depth], type_as_string[parser.type], parser.size[parser.depth]);
                 break;
             case LIBEXAMPLE_ELEMEND:
-                printf("[INFO] got return value 'ELEMEND'\n");
-                libexample_print(&parser);
                 break;
         }
     }
