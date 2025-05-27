@@ -165,22 +165,13 @@ Pre_EBML_Element default_header[] = {
         .range = {"not 0"},
         .type  = {"uinteger"},
     },
-/*
     {
-
-   name:  DocType
-
-   path:  "\EBML\DocType"
-
-   id:  0x4282
-
-   length:  >0
-
-   type:  String
-
-   description:  A string that describes and identifies the content of
-      the EBML Body that follows this EBML Header.
-
+        .name =  {"DocType"},
+        .path =  {"\\EBML\\DocType"},
+        .id   =  {"0x4282"},
+        .type =  {"string"},
+    },
+/*
     {
 
    name:  DocTypeVersion
@@ -464,6 +455,7 @@ const char *substate_as_string[] = {
 const size_t state_start = SUBSTATE_BODY;
 
 #define MAX_STACK_SIZE 8
+#define STRING_BUFFER_SIZE 1024
 Short_String prefix      = {TARGET_LIBRARY_NAME};
 #define PREFIX_CAPS capitalize(prefix)
 
@@ -488,6 +480,8 @@ void define_parser_type(FILE *f, Short_String parser_type_name, Short_String sta
     print_line(f, 1,     "uint64_t id[%d];", MAX_STACK_SIZE);
     print_line(f, 1,     "uint64_t size[%d];", MAX_STACK_SIZE);
     print_line(f, 1,     "uint64_t value;");
+    print_line(f, 1,     "size_t string_length;");
+    print_line(f, 1,     "char string_buffer[%d];", STRING_BUFFER_SIZE);
     print_line(f, 0, "} %s;", parser_type_name.cstr);
 }
 
@@ -534,6 +528,7 @@ void implement_init_func(FILE *f, Short_String signature, Short_String state) {
     print_line(f, 1,     "}");
     print_line(f, 1,     "p->body_offset[0] = 0;");
     print_line(f, 1,     "p->value = 0;");
+    print_line(f, 1,     "p->string_length = 0;");
     print_line(f, 0, "}\n");
 }
 
@@ -582,7 +577,6 @@ void implement_parse_func(FILE *f, Short_String signature, Short_String state_pr
     print_line(f, 2, "            }");
     print_line(f, 2, "            break;");
     print_line(f, 2, "        case %d:", UINTEGER);
-    print_line(f, 2, "            assert(p->size[p->depth] > 0);");
     print_line(f, 2, "            if (p->offset == p->body_offset[p->depth]) {");
     print_line(f, 2, "                assert(p->size[p->depth] <= 8);");
     print_line(f, 2, "                p->value = 0;");
@@ -596,6 +590,24 @@ void implement_parse_func(FILE *f, Short_String signature, Short_String state_pr
     print_line(f, 2, "                return %s_ELEMEND;", state_prefix.cstr);
     print_line(f, 2, "            } else {");
     print_line(f, 2, "                UNIMPLEMENTED(\"%s for type UINTEGER\");", build_state_nr(SUBSTATE_BODY).cstr);
+    print_line(f, 2, "            }");
+    print_line(f, 2, "            break;");
+    print_line(f, 2, "        case %d:", STRING);
+    print_line(f, 2, "            if (p->offset == p->body_offset[p->depth]) {");
+    print_line(f, 2, "                assert(p->size[p->depth] <= %d);", STRING_BUFFER_SIZE);
+    print_line(f, 2, "                p->string_length = 0;");
+    print_line(f, 2, "            }");
+    print_line(f, 2, "            if (p->offset + 1 < p->body_offset[p->depth] + p->size[p->depth]) {");
+    print_line(f, 2, "                p->string_buffer[p->string_length] = b;");
+    print_line(f, 2, "                p->string_length++;");
+    print_line(f, 2, "            } else if (p->offset + 1 == p->body_offset[p->depth] + p->size[p->depth]) {");
+    print_line(f, 2, "                p->string_buffer[p->string_length] = b;");
+    print_line(f, 2, "                p->string_length++;");
+    print_line(f, 2, "                p->state = %s;", build_state_nr(SUBSTATE_BODY).cstr);
+    print_line(f, 2, "                p->depth--;");
+    print_line(f, 2, "                return %s_ELEMEND;", state_prefix.cstr);
+    print_line(f, 2, "            } else {");
+    print_line(f, 2, "                UNIMPLEMENTED(\"%s for type STRING\");", build_state_nr(SUBSTATE_BODY).cstr);
     print_line(f, 2, "            }");
     print_line(f, 2, "            break;");
     print_line(f, 2, "        default:");
@@ -650,6 +662,8 @@ void implement_print_func(FILE *f, Short_String signature) {
     print_line(f, 0, "    }");
     print_line(f, 0, "    printf(\"]\\n\");");
     print_line(f, 0, "    printf(\"[INFO]   value = %%lu\\n\", p->value);");
+    print_line(f, 0, "    p->string_buffer[p->string_length] = '\\0';");
+    print_line(f, 0, "    printf(\"[INFO]   string = '%%s'\\n\", p->string_buffer);");
     print_line(f, 0, "}");
 }
 
