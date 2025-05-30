@@ -96,6 +96,7 @@ typedef enum {
     STRING,
     DATE,
     BINARY,
+    FLOAT,
     EBML_TYPE_COUNT,
 } EBML_Type;
 
@@ -106,6 +107,7 @@ const char *ebml_type_spelling[] = {
     [STRING]   = "string",
     [DATE]     = "date",
     [BINARY]   = "binary",
+    [FLOAT]    = "float",
 };
 static_assert(EBML_TYPE_COUNT == sizeof(ebml_type_spelling)/sizeof(ebml_type_spelling[0]));
 
@@ -268,9 +270,21 @@ EBML_Range parse_range(Short_String str) {
                 return result;
             }
             if (result.kind == RANGE_NONE) result.kind = RANGE_EXACT;
-            if (result.kind == RANGE_EXACT || result.kind == RANGE_EXCLUDED) {
-                result.lo = acc;
-                result.hi = acc;
+            switch (result.kind) {
+                case RANGE_NONE:
+                case RANGE_EXACT:
+                    result.lo = acc;
+                    result.hi = acc;
+                    break;
+                case RANGE_EXCLUDED:
+                case RANGE_LOWER_BOUND:
+                    break;
+                case RANGE_UPLOW_BOUND:
+                    result.hi = acc;
+                    result.hi_in = true;
+                    break;
+                case RANGE_UPPER_BOUND:
+                    UNIMPLEMENTED("parse_range");
             }
             return result;
         } else if ('0' <= c && c <= '9') {
@@ -284,12 +298,21 @@ EBML_Range parse_range(Short_String str) {
             i = 3;
         } else if (c == '>') {
             assert(i == 0);
-            assert(str.cstr[1] == '=');
+            if (str.cstr[1] != '=') {
+                printf("[ERROR] got string '%s'\n", str.cstr);
+                UNIMPLEMENTED("parse_range");
+            }
             result.kind = RANGE_LOWER_BOUND;
             result.lo_in = true;
             i = 1;
+        } else if (c == '-') {
+            assert(i > 0);
+            result.kind = RANGE_UPLOW_BOUND;
+            result.lo = acc;
+            result.lo_in = true;
+            acc = 0;
         } else {
-            printf("[ERROR] got character %c\n", c);
+            printf("[ERROR] got character '%c' in string '%s'\n", c, str.cstr);
             UNIMPLEMENTED("parse_range");
         }
     }
@@ -511,6 +534,7 @@ void implement_name(FILE *f, Short_String parser_type_name) {
         print_line(f, 2, "case 0x%lX: return \"%s\";", element_list[i].id, element_list[i].name.cstr);
     }
     print_line(f, 0, "    }");
+    print_line(f, 0, "    printf(\"[ERROR] got id 0x%%lX\\n\", id);");
     print_line(f, 0, "    UNREACHABLE(\"type: unknown id\");");
     print_line(f, 0, "}");
 }
@@ -569,6 +593,11 @@ void implement_parse_func(FILE *f, Short_String signature, Short_String state_pr
     print_line(f, 2, "        case %d:", MASTER);
     print_line(f, 2, "            if (p->depth == 0 || p->offset < p->body_offset[p->depth] + p->size[p->depth]) {");
     print_line(f, 2, "                p->depth++;");
+    print_line(f, 2, "                p->state = %s;", build_state_nr(SUBSTATE_ID).cstr);
+    print_line(f, 2, "                p->id_offset[p->depth]   = p->offset;");
+    print_line(f, 2, "                p->size_offset[p->depth] = p->offset + vint_length(b);");
+    print_line(f, 2, "                p->id[p->depth] = b;");
+    print_line(f, 2, "            } else if (p->offset == p->body_offset[p->depth] + p->size[p->depth]) {");
     print_line(f, 2, "                p->state = %s;", build_state_nr(SUBSTATE_ID).cstr);
     print_line(f, 2, "                p->id_offset[p->depth]   = p->offset;");
     print_line(f, 2, "                p->size_offset[p->depth] = p->offset + vint_length(b);");
