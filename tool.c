@@ -92,6 +92,7 @@ void print_pre_element(Pre_EBML_Element elem) {
 typedef enum {
     MASTER,
     UINTEGER,
+    INTEGER,
     UTF_8,
     STRING,
     DATE,
@@ -103,6 +104,7 @@ typedef enum {
 const char *ebml_type_spelling[] = {
     [MASTER]   = "master",
     [UINTEGER] = "uinteger",
+    [INTEGER]  = "integer",
     [UTF_8]    = "utf-8",
     [STRING]   = "string",
     [DATE]     = "date",
@@ -257,7 +259,7 @@ Pre_EBML_Element default_header[] = {
 // */
 };
 
-#define MAX_ELEMENT_COUNT 64
+#define MAX_ELEMENT_COUNT 256
 EBML_Element element_list[MAX_ELEMENT_COUNT];
 size_t element_count = 0;
 
