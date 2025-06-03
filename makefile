@@ -9,6 +9,12 @@ build/yxml.o: thirdparty/yxml.h thirdparty/yxml.c
 runtool: build/tool example.xml
 	./build/tool
 
+build/unit_test: unit_test.c tool.c
+	gcc -Wall -Wextra -Werror -o build/unit_test unit_test.c
+
+unittest: build/unit_test
+	./build/unit_test
+
 build/libexample.h: build/tool
 	./build/tool
 

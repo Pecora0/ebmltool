@@ -122,9 +122,12 @@ typedef enum {
 
 typedef struct {
     Range_Kind kind;
-    uint64_t lo;
+    EBML_Type type; // must be one of UINTEGER, INTEGER, FLOAT, DATE
+    uint64_t lo_uint;
+    double lo_float;
     bool lo_in;
-    uint64_t hi;
+    uint64_t hi_uint;
+    double hi_float;
     bool hi_in;
 } EBML_Range;
 
@@ -254,69 +257,162 @@ Pre_EBML_Element default_header[] = {
 // */
 };
 
-#define MAX_ELEMENT_COUNT 32
+#define MAX_ELEMENT_COUNT 64
 EBML_Element element_list[MAX_ELEMENT_COUNT];
 size_t element_count = 0;
 
-EBML_Range parse_range(Short_String str) {
-    uint64_t acc = 0;
-    EBML_Range result = {
-        .kind = RANGE_NONE,
-    };
+bool contains(Short_String sup, Short_String sub) {
+    size_t j = 0;
+    if (sub.cstr[j] == '\0') return true;
     for (size_t i=0; i<SHORT_STRING_LENGTH; i++) {
+        if (sup.cstr[i] == '\0') return false;
+        if (sup.cstr[i] == sub.cstr[j]) {
+            j++;
+            if (sub.cstr[j] == '\0') return true;
+        } else {
+            j = 0;
+        }
+    }
+    UNREACHABLE("short string not zero terminated");
+}
+
+EBML_Range parse_range(Short_String str) {
+    EBML_Range exact_number = {
+        .kind = RANGE_EXACT,
+        .type = UINTEGER,
+        .lo_uint = 0,
+        .hi_uint = UINT64_MAX,
+    };
+    EBML_Range not_number = {
+        .kind = RANGE_NONE,
+        .type = UINTEGER,
+        .lo_uint = 0,
+        .hi_uint = UINT64_MAX,
+    };
+    EBML_Range op_number = {
+        .kind = RANGE_NONE,
+        .type = UINTEGER,
+        .lo_uint = 0,
+        .hi_uint = UINT64_MAX,
+    };
+    EBML_Range hyphen_range = {
+        .kind = RANGE_NONE,
+        .type = UINTEGER,
+        .lo_in = false,
+        .hi_in = false,
+    };
+    size_t i = 0;
+    while (i < SHORT_STRING_LENGTH) {
         char c = str.cstr[i];
         if (c == '\0') {
             if (i == 0) {
+                EBML_Range result = {
+                    .kind = RANGE_NONE,
+                };
                 return result;
             }
-            if (result.kind == RANGE_NONE) result.kind = RANGE_EXACT;
-            switch (result.kind) {
-                case RANGE_NONE:
-                case RANGE_EXACT:
-                    result.lo = acc;
-                    result.hi = acc;
-                    break;
-                case RANGE_EXCLUDED:
-                case RANGE_LOWER_BOUND:
-                    break;
-                case RANGE_UPLOW_BOUND:
-                    result.hi = acc;
-                    result.hi_in = true;
-                    break;
-                case RANGE_UPPER_BOUND:
-                    UNIMPLEMENTED("parse_range");
+            if (hyphen_range.kind != RANGE_NONE) {
+                return hyphen_range;
             }
-            return result;
-        } else if ('0' <= c && c <= '9') {
-            acc = 10*acc + (c - '0');
+            if (not_number.kind != RANGE_NONE) {
+                assert(not_number.lo_uint == not_number.hi_uint);
+                return not_number;
+            }
+            if (exact_number.kind != RANGE_NONE) {
+                assert(exact_number.lo_uint == exact_number.hi_uint);
+                return exact_number;
+            }
+            if (op_number.kind != RANGE_NONE) {
+                return op_number;
+            }
+            printf("[ERROR] got string '%s'\n", str.cstr);
+            UNIMPLEMENTED("parse_range: end of string");
+        } else if (c == ' ') {
+            i++;
         } else if (c == 'n') {
-            assert(i == 0);
-            assert(str.cstr[1] == 'o');
-            assert(str.cstr[2] == 't');
-            assert(str.cstr[3] == ' ');
-            result.kind = RANGE_EXCLUDED;
-            i = 3;
-        } else if (c == '>') {
-            assert(i == 0);
-            if (str.cstr[1] != '=') {
-                printf("[ERROR] got string '%s'\n", str.cstr);
-                UNIMPLEMENTED("parse_range");
+            if (strncmp(str.cstr + i, "not", 3) == 0) {
+                exact_number.kind = RANGE_NONE;
+                not_number.kind   = RANGE_EXCLUDED;
+                op_number.kind    = RANGE_NONE;
+                hyphen_range.kind = RANGE_NONE;
+                i += 3;
+            } else {
+                printf("[ERROR] got character '%c' in string '%s'\n", c, str.cstr);
+                UNIMPLEMENTED("parse_range: contains character 'n'");
             }
-            result.kind = RANGE_LOWER_BOUND;
-            result.lo_in = true;
-            i = 1;
         } else if (c == '-') {
-            assert(i > 0);
-            result.kind = RANGE_UPLOW_BOUND;
-            result.lo = acc;
-            result.lo_in = true;
-            acc = 0;
+            hyphen_range.kind = RANGE_UPLOW_BOUND;
+            i++;
+        } else if (c == '>') {
+            if (strncmp(str.cstr + i, ">=", 2) == 0) {
+                exact_number.kind = RANGE_NONE;
+                not_number.kind   = RANGE_NONE;
+                op_number.kind    = RANGE_LOWER_BOUND;
+                hyphen_range.kind = RANGE_NONE;
+                op_number.lo_in = true;
+                i += 2;
+            } else if (strncmp(str.cstr + i, ">", 1) == 0) {
+                exact_number.kind = RANGE_NONE;
+                not_number.kind   = RANGE_NONE;
+                op_number.kind    = RANGE_LOWER_BOUND;
+                hyphen_range.kind = RANGE_NONE;
+                op_number.lo_in = false;
+                i += 1;
+            } else {
+                printf("[ERROR] got character '%c' in string '%s'\n", c, str.cstr);
+                UNIMPLEMENTED("parse_range: contains character '>'");
+            }
+        } else if ('0' <= c && c <= '9') {
+            char *endptr_floot;
+            double floot = strtod(str.cstr + i, &endptr_floot);
+            char *endptr_uint;
+            long uint = strtol(str.cstr + i, &endptr_uint, 10);
+            if (endptr_floot == str.cstr + i) {
+                UNIMPLEMENTED("no conversion to double performed");
+            } else if (endptr_floot > endptr_uint) {
+                exact_number.lo_float = floot;
+                exact_number.hi_float = floot;
+                exact_number.type = FLOAT;
+                not_number.lo_float = floot;
+                not_number.hi_float = floot;
+                not_number.type = FLOAT;
+                op_number.lo_float = floot;
+                op_number.hi_float = floot;
+                op_number.type = FLOAT;
+                if (hyphen_range.lo_in) {
+                    hyphen_range.hi_float = floot;
+                    hyphen_range.hi_in = true;
+                } else {
+                    hyphen_range.lo_float = floot;
+                    hyphen_range.lo_in = true;
+                }
+                hyphen_range.type = FLOAT;
+                i = endptr_floot - str.cstr;
+            } else if (endptr_uint == str.cstr + i) {
+                UNIMPLEMENTED("no conversion to long performed");
+            } else {
+                assert(uint >= 0);
+                exact_number.lo_uint = uint;
+                exact_number.hi_uint = uint;
+                not_number.lo_uint = uint;
+                not_number.hi_uint = uint;
+                op_number.lo_uint = uint;
+                op_number.hi_uint = uint;
+                if (hyphen_range.lo_in) {
+                    hyphen_range.hi_uint = uint;
+                    hyphen_range.hi_in = true;
+                } else {
+                    hyphen_range.lo_uint = uint;
+                    hyphen_range.lo_in = true;
+                }
+                i = endptr_uint - str.cstr;
+            }
         } else {
             printf("[ERROR] got character '%c' in string '%s'\n", c, str.cstr);
-            UNIMPLEMENTED("parse_range");
+            UNIMPLEMENTED("parse_range: unknown character");
         }
     }
-    UNREACHABLE("Short_String is not zero terminated");
+    UNREACHABLE("parse_range: string not zero terminated");
 }
 
 bool is_valid_name(Short_String str) {
@@ -372,6 +468,7 @@ bool has_upper_bound(EBML_Range r) {
 }
 
 size_t upper_bound(EBML_Range r) {
+    assert(r.type == UINTEGER);
     switch (r.kind) {
         case RANGE_NONE:
         case RANGE_LOWER_BOUND:
@@ -382,10 +479,10 @@ size_t upper_bound(EBML_Range r) {
             if (!r.hi_in) {
                 UNIMPLEMENTED("exclusive bound");
             }
-            return r.hi;
+            return r.hi_uint;
         case RANGE_EXACT:
-            assert(r.hi == r.lo);
-            return r.hi;
+            assert(r.hi_uint == r.lo_uint);
+            return r.hi_uint;
     }
     UNREACHABLE("no Range_Kind matched");
 }
@@ -697,6 +794,7 @@ void implement_print_func(FILE *f, Short_String signature) {
     print_line(f, 0, "}");
 }
 
+#ifndef UNIT_TESTING
 int main(void) {
     for (size_t i=0; i<sizeof(default_header)/sizeof(default_header[0]); i++) {
         append_element(process_element(default_header[i]));
@@ -871,3 +969,4 @@ int main(void) {
 
     fclose(target_file);
 }
+#endif //UNIT_TESTING
