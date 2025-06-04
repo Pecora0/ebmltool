@@ -138,6 +138,7 @@ typedef struct {
 typedef struct {
     size_t depth;
     Short_String names[MAX_PATH_DEPTH];
+    bool recursive[MAX_PATH_DEPTH];
 } EBML_Path;
 
 typedef struct {
@@ -259,7 +260,7 @@ Pre_EBML_Element default_header[] = {
 // */
 };
 
-#define MAX_ELEMENT_COUNT 256
+#define MAX_ELEMENT_COUNT 512
 EBML_Element element_list[MAX_ELEMENT_COUNT];
 size_t element_count = 0;
 
@@ -579,15 +580,22 @@ EBML_Path parse_path(Short_String str) {
         .depth = 0,
     };
     char *path_delim = "\\";
-    for (char *name = strtok(str.cstr, path_delim); name != NULL; name = strtok(NULL, path_delim)) {
-        Short_String name_short = shortf("%s", name);
+    for (char *path_elem = strtok(str.cstr, path_delim); path_elem != NULL; path_elem = strtok(NULL, path_delim)) {
+        assert(result.depth < MAX_PATH_DEPTH);
+        Short_String name;
+        if (path_elem[0] == '+') {
+            name = shortf("%s", path_elem + 1);
+            result.recursive[result.depth] = true;
+        } else {
+            name = shortf("%s", path_elem + 0);
+            result.recursive[result.depth] = false;
+        }
 
-        if (is_valid_name(name_short)) {
-            assert(result.depth < MAX_PATH_DEPTH);
-            result.names[result.depth] = name_short;
+        if (is_valid_name(name)) {
+            result.names[result.depth] = name;
             result.depth++;
         } else {
-            printf("[ERROR] not a valid name '%s'\n", name_short.cstr);
+            printf("[ERROR] not a valid path element '%s'\n", name.cstr);
             UNIMPLEMENTED("proper path parsing");
         }
     }

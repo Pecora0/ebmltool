@@ -42,6 +42,21 @@ struct {
 };
 const size_t range_test_count = sizeof(range_test) / sizeof(range_test[0]);
 
+struct {
+    Short_String spelling;
+    EBML_Path compare;
+} path_test[] = {
+    {
+        {"\\Files"},
+        {.depth = 1, .names = {{"Files"}}, .recursive = {false}},
+    },
+    {
+        {"\\Segment\\Chapters\\EditionEntry\\+ChapterAtom"},
+        {.depth = 4, .names = {{"Segment"}, {"Chapters"}, {"EditionEntry"}, {"ChapterAtom"}}, .recursive = {false,false,false,true},}
+    },
+};
+const size_t path_test_count = sizeof(path_test) / sizeof(path_test[0]);
+
 bool range_equal(EBML_Range r1, EBML_Range r2) {
     if (r1.kind != r2.kind) return false;
     switch (r1.kind) {
@@ -135,6 +150,15 @@ void range_print(EBML_Range r) {
     }
 }
 
+bool path_equal(EBML_Path p1, EBML_Path p2) {
+    if (p1.depth != p2.depth) return false;
+    for (size_t i=0; i<p1.depth; i++) {
+        if (p1.recursive[i] != p2.recursive[i]) return false;
+        if (strcmp(p1.names[i].cstr, p2.names[i].cstr) != 0) return false;
+    }
+    return true;
+}
+
 int main() {
     for (size_t i=0; i<range_test_count; i++) {
         printf("[INFO] running `parse_range` on string \"%s\"\n", range_test[i].spelling.cstr);
@@ -148,6 +172,15 @@ int main() {
             printf("[INFO] REALITY =============================\n");
             range_print(r);
             printf("[INFO] =====================================\n");
+        }
+    }
+    for (size_t i=0; i<path_test_count; i++) {
+        printf("[INFO] running `parse_path` on string \"%s\"\n", path_test[i].spelling.cstr);
+        EBML_Path p = parse_path(path_test[i].spelling);
+        if (path_equal(p, path_test[i].compare)) {
+            printf("[INFO] test passed\n");
+        } else {
+            UNIMPLEMENTED("path test failed");
         }
     }
 }
