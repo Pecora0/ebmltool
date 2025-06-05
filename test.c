@@ -25,6 +25,8 @@ int main(int argc, char **argv) {
     libexample_parser_t parser;
     libexample_init(&parser);
 
+    size_t cur_type;
+
     //libexample_print(&parser);
     for (int c = fgetc(src_file); c != EOF; c = fgetc(src_file)) {
         // printf("[INFO] read byte 0x%X\n", c);
@@ -33,9 +35,27 @@ int main(int argc, char **argv) {
             case LIBEXAMPLE_OK:
                 break;
             case LIBEXAMPLE_ELEMSTART:
-                printf("[INFO] got element '%s' (0x%lX) of type '%s' and size %ld\n", parser.name, parser.id[parser.depth], type_as_string[parser.type], parser.size[parser.depth]);
+                cur_type = parser.type;
+                printf("[INFO] ");
+                for (size_t i=0; i<parser.depth-1; i++) printf("|");
+                printf("+--%s--0x%lX--%s--%lu--\n", parser.name, parser.id[parser.depth], type_as_string[parser.type], parser.size[parser.depth]);
                 break;
             case LIBEXAMPLE_ELEMEND:
+                switch (cur_type) {
+                    case 1: //uinteger
+                        printf("[INFO] ");
+                        for (size_t i=0; i<parser.depth+1; i++) printf("|");
+                        printf("%lu\n", parser.value);
+                        break;
+                    case 4: //string
+                        printf("[INFO] ");
+                        for (size_t i=0; i<parser.depth+1; i++) printf("|");
+                        printf("%s\n", parser.string_buffer);
+                        break;
+                    default:
+                        printf("[ERROR] got type %zu (%s)\n", cur_type, type_as_string[cur_type]);
+                        UNIMPLEMENTED("handling LIBEXAMPLE ELEMEND");
+                }
                 break;
         }
     }
