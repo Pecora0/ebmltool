@@ -32,35 +32,49 @@ int main(int argc, char **argv) {
         // printf("[INFO] read byte 0x%X\n", c);
         libexample_return_t r = libexample_parse(&parser, (libexample_byte_t) c);
         switch (r) {
+            case LIBEXAMPLE_ERR:
+                printf("0x%02X\n", c);
+                printf("[ERROR] got error from library\n");
+                libexample_print(&parser);
+                fclose(src_file);
+                exit(1);
             case LIBEXAMPLE_OK:
+                printf("0x%02X ", c);
                 break;
             case LIBEXAMPLE_ELEMSTART:
+                printf("\n");
                 cur_type = parser.type;
                 printf("[INFO] ");
-                for (size_t i=0; i<parser.depth-1; i++) printf("|");
-                printf("+--%s--0x%lX--%s--%lu--\n", parser.name, parser.id[parser.depth], type_as_string[parser.type], parser.size[parser.depth]);
+                for (size_t i=0; i<parser.this_depth-1; i++) printf("|");
+                printf("+--%zu--%s--0x%lX--%s--%lu--\n", parser.this_depth, parser.name, parser.id[parser.this_depth], type_as_string[parser.type], parser.size[parser.this_depth]);
+                printf("0x%02X ", c);
                 break;
             case LIBEXAMPLE_ELEMEND:
+                printf("\n");
                 switch (cur_type) {
                     case 1: //uinteger
                         printf("[INFO] ");
-                        for (size_t i=0; i<parser.depth+1; i++) printf("|");
+                        for (size_t i=0; i<parser.this_depth; i++) printf("|");
                         printf("%lu\n", parser.value);
                         break;
                     case 4: //string
                         printf("[INFO] ");
-                        for (size_t i=0; i<parser.depth+1; i++) printf("|");
+                        for (size_t i=0; i<parser.this_depth; i++) printf("|");
                         printf("%s\n", parser.string_buffer);
                         break;
                     default:
                         printf("[ERROR] got type %zu (%s)\n", cur_type, type_as_string[cur_type]);
                         UNIMPLEMENTED("handling LIBEXAMPLE ELEMEND");
                 }
+                printf("0x%02X ", c);
                 break;
         }
     }
     libexample_return_t r = libexample_eof(&parser);
     switch (r) {
+        case LIBEXAMPLE_ERR:
+            printf("[ERROR] got error from library\n");
+            break;
         case LIBEXAMPLE_OK:
         case LIBEXAMPLE_ELEMSTART:
         case LIBEXAMPLE_ELEMEND:

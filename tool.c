@@ -149,6 +149,7 @@ typedef struct {
     EBML_Range range;
 } EBML_Element;
 
+// TODO: introduce global elements (see section 11.3 of RFC 8794)
 Pre_EBML_Element default_header[] = {
     {
         .name = {"EBML"},
@@ -741,6 +742,7 @@ void define_parser_type(FILE *f, Short_String parser_type_name, Short_String sta
     print_line(f, 1,     "uint64_t id[%d];", MAX_STACK_SIZE);
     print_line(f, 1,     "uint64_t size[%d];", MAX_STACK_SIZE);
     // fields meant for the user to extract information
+    print_line(f, 1,     "size_t this_depth;");
     print_line(f, 1,     "char *name;");
     print_line(f, 1,     "size_t type;");
     print_line(f, 1,     "uint64_t value;");
@@ -760,7 +762,6 @@ void implement_vint_length(FILE *f, Short_String byte_type_name) {
 
 void implement_drop_first_active_bit(FILE *f, Short_String byte_type_name) {
     print_line(f, 0, "%s drop_first_active_bit(%s x) {", byte_type_name.cstr, byte_type_name.cstr);
-    print_line(f, 0, "    UNUSED(x);");
     print_line(f, 0, "    %s mask = ~0;", byte_type_name.cstr);
     print_line(f, 0, "    while (mask >= x) mask >>= 1;");
     print_line(f, 0, "    return mask & x;");
@@ -776,7 +777,7 @@ void implement_type(FILE *f, Short_String parser_type_name) {
         print_line(f, 2, "case 0x%lX: return %d;", element_list[i].id, element_list[i].type);
     }
     print_line(f, 0, "    }");
-    print_line(f, 0, "    UNREACHABLE(\"type: unknown id\");");
+    print_line(f, 0, "    return -1;");
     print_line(f, 0, "}");
 }
 
@@ -790,7 +791,7 @@ void implement_name(FILE *f, Short_String parser_type_name) {
     }
     print_line(f, 0, "    }");
     print_line(f, 0, "    printf(\"[ERROR] got id 0x%%lX\\n\", id);");
-    print_line(f, 0, "    UNREACHABLE(\"type: unknown id\");");
+    print_line(f, 0, "    UNREACHABLE(\"name: unknown id\");");
     print_line(f, 0, "}");
 }
 
@@ -810,94 +811,95 @@ void implement_init_func(FILE *f, Short_String signature, Short_String state) {
     print_line(f, 0, "}\n");
 }
 
+void implement_incdepth_func(FILE *f, Short_String parser_type_name) {
+    print_line(f, 0, "void incdepth(%s *p) {", parser_type_name.cstr);
+    print_line(f, 0, "    assert(p->depth < %d);", MAX_STACK_SIZE);
+    print_line(f, 0, "    p->depth++;");
+    print_line(f, 0, "    p->id_offset[p->depth]   = -1;");
+    print_line(f, 0, "    p->size_offset[p->depth] = -1;");
+    print_line(f, 0, "    p->body_offset[p->depth] = -1;");
+    print_line(f, 0, "}");
+}
+
+void implement_decdepth_func(FILE *f, Short_String parser_type_name) {
+    print_line(f, 0, "void decdepth(%s *p) {", parser_type_name.cstr);
+    print_line(f, 0, "    assert(p->depth > 0);");
+    print_line(f, 0, "    p->depth--;");
+    print_line(f, 0, "}");
+}
+
 void implement_parse_func(FILE *f, Short_String signature, Short_String state_prefix) {
     print_line(f, 0, "%s {\n", signature.cstr);
     print_line(f, 0, "    p->offset++;");
-    print_line(f, 0, "    switch (p->state) {");
-    print_line(f, 2, "case %s:", build_state_nr(SUBSTATE_ID).cstr);
-    print_line(f, 2, "    if (p->offset < p->id_offset[p->depth]) {");
-    print_line(f, 2, "        p->id_offset[p->depth]   = p->offset;");
-    print_line(f, 2, "        p->size_offset[p->depth] = p->offset + vint_length(b);");
-    print_line(f, 2, "        p->id[p->depth] = 0;");
-    print_line(f, 2, "    }");
-    print_line(f, 2, "    assert(p->offset < p->size_offset[p->depth]);");
-    print_line(f, 2, "    p->id[p->depth] = 0x100 * p->id[p->depth] + b;");
-    print_line(f, 2, "    if (p->offset + 1 == p->size_offset[p->depth]) {");
-    print_line(f, 2, "        p->state = %s;", build_state_nr(SUBSTATE_SIZE).cstr);
-    print_line(f, 2, "    }");
-    print_line(f, 2, "    break;");
-    print_line(f, 2, "case %s:", build_state_nr(SUBSTATE_SIZE).cstr);
-    print_line(f, 2, "    if (p->size_offset[p->depth] == p->offset) {");
-    print_line(f, 2, "        p->body_offset[p->depth] = p->offset + vint_length(b);");
-    print_line(f, 2, "        p->size[p->depth] = drop_first_active_bit(b);");
-    print_line(f, 2, "    } else if (p->size_offset[p->depth] < p->offset) {");
-    print_line(f, 2, "        p->size[p->depth] = 0x100 * p->size[p->depth] + b;");
-    print_line(f, 2, "    } else {");
-    print_line(f, 2, "        UNREACHABLE(\"size offset is bigger than current offset\");");
-    print_line(f, 2, "    }");
-    print_line(f, 2, "    assert(p->body_offset[p->depth] > p->offset);");
-    print_line(f, 2, "    if (p->body_offset[p->depth] == p->offset + 1) {");
-    print_line(f, 2, "        p->state = %s;", build_state_nr(SUBSTATE_BODY).cstr);
-    print_line(f, 2, "        p->name = name(p);");
-    print_line(f, 2, "        p->type = type(p);"); 
-    print_line(f, 2, "        return %s_ELEMSTART;", state_prefix.cstr);
-    print_line(f, 2, "    }");
-    print_line(f, 2, "    break;");
-    print_line(f, 2, "case %s:", build_state_nr(SUBSTATE_BODY).cstr);
-    print_line(f, 2, "    switch (type(p)) {");
-    print_line(f, 2, "        case %d:", MASTER);
-    print_line(f, 2, "            if (p->depth == 0 || p->offset < p->body_offset[p->depth] + p->size[p->depth]) {");
-    print_line(f, 2, "                p->depth++;");
-    print_line(f, 2, "                p->state = %s;", build_state_nr(SUBSTATE_ID).cstr);
-    print_line(f, 2, "                p->id_offset[p->depth]   = p->offset;");
-    print_line(f, 2, "                p->size_offset[p->depth] = p->offset + vint_length(b);");
-    print_line(f, 2, "                p->id[p->depth] = b;");
-    print_line(f, 2, "            } else if (p->offset == p->body_offset[p->depth] + p->size[p->depth]) {");
-    print_line(f, 2, "                p->state = %s;", build_state_nr(SUBSTATE_ID).cstr);
-    print_line(f, 2, "                p->id_offset[p->depth]   = p->offset;");
-    print_line(f, 2, "                p->size_offset[p->depth] = p->offset + vint_length(b);");
-    print_line(f, 2, "                p->id[p->depth] = b;");
-    print_line(f, 2, "            } else {");
-    print_line(f, 2, "                UNIMPLEMENTED(\"%s for type MASTER\");", build_state_nr(SUBSTATE_BODY).cstr);
-    print_line(f, 2, "            }");
-    print_line(f, 2, "            break;");
-    print_line(f, 2, "        case %d:", UINTEGER);
-    print_line(f, 2, "            if (p->offset == p->body_offset[p->depth]) {");
-    print_line(f, 2, "                assert(p->size[p->depth] <= 8);");
-    print_line(f, 2, "                p->value = 0;");
-    print_line(f, 2, "            }");
-    print_line(f, 2, "            if (p->offset + 1 < p->body_offset[p->depth] + p->size[p->depth]) {");
-    print_line(f, 2, "                UNIMPLEMENTED(\"%s for type UINTEGER at inner byte\");", build_state_nr(SUBSTATE_BODY).cstr);
-    print_line(f, 2, "            } else if (p->offset + 1 == p->body_offset[p->depth] + p->size[p->depth]) {");
-    print_line(f, 2, "                p->value = 0x80 * p->value + b;");
-    print_line(f, 2, "                p->state = %s;", build_state_nr(SUBSTATE_BODY).cstr);
-    print_line(f, 2, "                p->depth--;");
-    print_line(f, 2, "                return %s_ELEMEND;", state_prefix.cstr);
-    print_line(f, 2, "            } else {");
-    print_line(f, 2, "                UNIMPLEMENTED(\"%s for type UINTEGER\");", build_state_nr(SUBSTATE_BODY).cstr);
-    print_line(f, 2, "            }");
-    print_line(f, 2, "            break;");
-    print_line(f, 2, "        case %d:", STRING);
-    print_line(f, 2, "            if (p->offset == p->body_offset[p->depth]) {");
+    print_line(f, 0, "    if (p->depth == 0) {");
+    print_line(f, 0, "        incdepth(p);");
+    print_line(f, 0, "        p->id_offset[p->depth]   = p->offset;");
+    print_line(f, 0, "        p->size_offset[p->depth] = p->offset + vint_length(b);");
+    print_line(f, 0, "        p->id[p->depth] = b;");
+    print_line(f, 0, "    }");
+    print_line(f, 0, "    assert(p->depth > 0);");
+    print_line(f, 0, "    assert(p->id_offset[p->depth] < p->size_offset[p->depth]);");
+    print_line(f, 0, "    assert(p->size_offset[p->depth] < p->body_offset[p->depth]);");
+    print_line(f, 0, "    if (p->offset <= p->id_offset[p->depth]) {");
+    print_line(f, 0, "        p->id_offset[p->depth] = p->offset;");
+    print_line(f, 0, "        p->size_offset[p->depth] = p->offset + vint_length(b);");
+    print_line(f, 0, "        p->id[p->depth] = b;");
+    print_line(f, 0, "    } else if (p->offset < p->size_offset[p->depth]) {");
+    print_line(f, 0, "        p->id[p->depth] = (p->id[p->depth] << 8) + b;");
+    print_line(f, 0, "    } else if (p->offset == p->size_offset[p->depth]) {");
+    print_line(f, 0, "        p->body_offset[p->depth] = p->offset + vint_length(b);");
+    print_line(f, 0, "        p->size[p->depth] = drop_first_active_bit(b);");
+    print_line(f, 0, "    } else if (p->offset < p->body_offset[p->depth]) {");
+    print_line(f, 2, "        p->size[p->depth] = (p->size[p->depth] << 8) + b;");
+    print_line(f, 0, "    } else if (p->offset == p->body_offset[p->depth]) {");
+    print_line(f, 0, "        int t = type(p);"); 
+    print_line(f, 0, "        if (t>=0) {");
+    print_line(f, 0, "            p->type = t;"); 
+    print_line(f, 0, "        } else {");
+    print_line(f, 0, "            return %s_ERR;", state_prefix.cstr);
+    print_line(f, 0, "        }");
+    print_line(f, 0, "        p->name = name(p);");
+    print_line(f, 0, "        p->this_depth = p->depth;");
+    print_line(f, 0, "        switch (p->type) {");
+    print_line(f, 0, "            case %d:", MASTER);
+    print_line(f, 0, "                incdepth(p);");
+    print_line(f, 0, "                p->id_offset[p->depth]   = p->offset;");
+    print_line(f, 0, "                p->size_offset[p->depth] = p->offset + vint_length(b);");
+    print_line(f, 0, "                p->id[p->depth] = b;");
+    print_line(f, 0, "                break;");
+    print_line(f, 0, "            case %d:", UINTEGER);
+    print_line(f, 0, "                assert(p->size[p->depth] <= 8);");
+    print_line(f, 0, "                p->value = b;");
+    print_line(f, 0, "                break;");
+    print_line(f, 0, "            case %d:", STRING);
     print_line(f, 2, "                assert(p->size[p->depth] <= %d);", STRING_BUFFER_SIZE);
-    print_line(f, 2, "                p->string_length = 0;");
-    print_line(f, 2, "            }");
-    print_line(f, 2, "            if (p->offset + 1 < p->body_offset[p->depth] + p->size[p->depth]) {");
-    print_line(f, 2, "                p->string_buffer[p->string_length] = b;");
-    print_line(f, 2, "                p->string_length++;");
-    print_line(f, 2, "            } else if (p->offset + 1 == p->body_offset[p->depth] + p->size[p->depth]) {");
-    print_line(f, 2, "                p->string_buffer[p->string_length] = b;");
-    print_line(f, 2, "                p->string_length++;");
-    print_line(f, 2, "                p->state = %s;", build_state_nr(SUBSTATE_BODY).cstr);
-    print_line(f, 2, "                p->depth--;");
-    print_line(f, 2, "                return %s_ELEMEND;", state_prefix.cstr);
-    print_line(f, 2, "            } else {");
-    print_line(f, 2, "                UNIMPLEMENTED(\"%s for type STRING\");", build_state_nr(SUBSTATE_BODY).cstr);
-    print_line(f, 2, "            }");
-    print_line(f, 2, "            break;");
-    print_line(f, 2, "        default:");
-    print_line(f, 2, "            UNIMPLEMENTED(\"%s\");", build_state_nr(SUBSTATE_BODY).cstr);
-    print_line(f, 2, "    }");
+    print_line(f, 0, "                p->string_buffer[0] = b;");
+    print_line(f, 2, "                p->string_length = 1;");
+    print_line(f, 0, "                p->string_buffer[1] = '\\0';");
+    print_line(f, 0, "                break;");
+    print_line(f, 0, "            default: UNREACHABLE(\"unknown type\");");
+    print_line(f, 0, "        }");
+    print_line(f, 0, "        return %s_ELEMSTART;", state_prefix.cstr);
+    print_line(f, 0, "    } else if (p->offset < p->body_offset[p->depth] + p->size[p->depth]) {");
+    print_line(f, 0, "        switch (p->type) {");
+    print_line(f, 0, "            case %d:", UINTEGER);
+    print_line(f, 0, "                p->value = (p->value << 8) + b;");
+    print_line(f, 0, "                break;");
+    print_line(f, 0, "            case %d:", STRING);
+    print_line(f, 0, "                p->string_buffer[p->string_length] = b;");
+    print_line(f, 0, "                p->string_length++;");
+    print_line(f, 0, "                p->string_buffer[p->string_length] = '\\0';");
+    print_line(f, 0, "                break;");
+    print_line(f, 0, "            default: UNREACHABLE(\"unknown type\");");
+    print_line(f, 0, "        }");
+    print_line(f, 0, "    } else {");
+    print_line(f, 0, "        while (p->offset == p->body_offset[p->depth] + p->size[p->depth]) decdepth(p);");
+    print_line(f, 0, "        assert(p->offset < p->body_offset[p->depth] + p->size[p->depth]);");
+    print_line(f, 0, "        incdepth(p);");
+    print_line(f, 0, "        p->id_offset[p->depth] = p->offset;");
+    print_line(f, 0, "        p->size_offset[p->depth] = p->offset + vint_length(b);");
+    print_line(f, 0, "        p->id[p->depth] = b;");
+    print_line(f, 0, "        return %s_ELEMEND;", state_prefix.cstr);
     print_line(f, 0, "    }");
     print_line(f, 0, "    return %s_OK;", state_prefix.cstr);
     print_line(f, 0, "}");
@@ -1035,21 +1037,21 @@ int main(void) {
         print_path(element_list[i].path);
     }
 
-    Short_String target_file_name     = shortf("build/%s.h", TARGET_LIBRARY_NAME);
-    Short_String include_guard        = capitalize(shortf("%s_H", TARGET_LIBRARY_NAME));
-    Short_String implementation_guard = capitalize(shortf("%s_IMPLEMENTATION", TARGET_LIBRARY_NAME));
-    Short_String byte_type_name       = shortf("%s_byte_t", prefix.cstr);
-    Short_String parser_type_name     = shortf("%s_parser_t", prefix.cstr);
-    Short_String return_type_name     = shortf("%s_return_t", prefix.cstr);
-    Short_String state_type_name      = shortf("%s_state", prefix.cstr);
-    Short_String init_func_name       = shortf("%s_init", prefix.cstr);
-    Short_String init_func_signature  = shortf("void %s(%s *p)", init_func_name.cstr, parser_type_name.cstr);
-    Short_String parse_func_name      = shortf("%s_parse", prefix.cstr);
-    Short_String parse_func_signature = shortf("%s %s(%s *p, %s b)", return_type_name.cstr, parse_func_name.cstr, parser_type_name.cstr, byte_type_name.cstr);
-    Short_String eof_func_name        = shortf("%s_eof", prefix.cstr);
-    Short_String eof_func_signature   = shortf("%s %s(%s *p)", return_type_name.cstr, eof_func_name.cstr, parser_type_name.cstr);
-    Short_String print_func_name      = shortf("%s_print", prefix.cstr);
-    Short_String print_func_signature = shortf("void %s(%s *p)", print_func_name.cstr, parser_type_name.cstr);
+    Short_String target_file_name        = shortf("build/%s.h", TARGET_LIBRARY_NAME);
+    Short_String include_guard           = capitalize(shortf("%s_H", TARGET_LIBRARY_NAME));
+    Short_String implementation_guard    = capitalize(shortf("%s_IMPLEMENTATION", TARGET_LIBRARY_NAME));
+    Short_String byte_type_name          = shortf("%s_byte_t", prefix.cstr);
+    Short_String parser_type_name        = shortf("%s_parser_t", prefix.cstr);
+    Short_String return_type_name        = shortf("%s_return_t", prefix.cstr);
+    Short_String state_type_name         = shortf("%s_state", prefix.cstr);
+    Short_String init_func_name          = shortf("%s_init", prefix.cstr);
+    Short_String init_func_signature     = shortf("void %s(%s *p)", init_func_name.cstr, parser_type_name.cstr);
+    Short_String parse_func_name         = shortf("%s_parse", prefix.cstr);
+    Short_String parse_func_signature    = shortf("%s %s(%s *p, %s b)", return_type_name.cstr, parse_func_name.cstr, parser_type_name.cstr, byte_type_name.cstr);
+    Short_String eof_func_name           = shortf("%s_eof", prefix.cstr);
+    Short_String eof_func_signature      = shortf("%s %s(%s *p)", return_type_name.cstr, eof_func_name.cstr, parser_type_name.cstr);
+    Short_String print_func_name         = shortf("%s_print", prefix.cstr);
+    Short_String print_func_signature    = shortf("void %s(%s *p)", print_func_name.cstr, parser_type_name.cstr);
 
     FILE *target_file = fopen(target_file_name.cstr, "w");
     if (target_file == NULL) {
@@ -1068,6 +1070,7 @@ int main(void) {
     print_line(target_file, 0, "typedef unsigned char %s;", byte_type_name.cstr);
     line();
     print_line(target_file, 0, "typedef enum {");
+    print_line(target_file, 1,     "%s_ERR = -1,", PREFIX_CAPS.cstr);
     print_line(target_file, 1,     "%s_OK = 0,", PREFIX_CAPS.cstr);
     print_line(target_file, 1,     "%s_ELEMSTART,", PREFIX_CAPS.cstr);
     print_line(target_file, 1,     "%s_ELEMEND,", PREFIX_CAPS.cstr);
@@ -1115,6 +1118,10 @@ int main(void) {
     implement_name(target_file, parser_type_name);
     line();
     implement_init_func(target_file, init_func_signature, build_state_nr(state_start));
+    line();
+    implement_incdepth_func(target_file, parser_type_name);
+    line();
+    implement_decdepth_func(target_file, parser_type_name);
     line();
     implement_parse_func(target_file, parse_func_signature, PREFIX_CAPS);
     line();
