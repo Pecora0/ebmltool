@@ -923,7 +923,7 @@ void implement_parse_func(FILE *f, Short_String signature, Short_String state_pr
     print_line(f, 0, "                break;");
     print_line(f, 0, "            case %d:", BINARY);
     print_line(f, 0, "                break;;");
-    print_line(f, 0, "            default: UNREACHABLE(\"unknown type\");");
+    print_line(f, 0, "            default: UNREACHABLE(\"first of body: unknown type\");");
     print_line(f, 0, "        }");
     print_line(f, 0, "        return %s_ELEMSTART;", state_prefix.cstr);
     print_line(f, 0, "    } else if (p->offset < p->body_offset[p->depth] + p->size[p->depth]) {");
@@ -938,7 +938,7 @@ void implement_parse_func(FILE *f, Short_String signature, Short_String state_pr
     print_line(f, 0, "                break;");
     print_line(f, 0, "            case %d:", BINARY);
     print_line(f, 0, "                break;");
-    print_line(f, 0, "            default: UNREACHABLE(\"unknown type\");");
+    print_line(f, 0, "            default: UNREACHABLE(\"inside of body: unknown type\");");
     print_line(f, 0, "        }");
     print_line(f, 0, "    } else {");
     print_line(f, 0, "        while (p->offset == p->body_offset[p->depth] + p->size[p->depth]) decdepth(p);");
