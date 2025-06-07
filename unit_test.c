@@ -54,6 +54,10 @@ struct {
         {"\\Segment\\Chapters\\EditionEntry\\+ChapterAtom"},
         {.depth = 4, .names = {{"Segment"}, {"Chapters"}, {"EditionEntry"}, {"ChapterAtom"}}, .recursive = {false,false,false,true},}
     },
+    {
+        {"\\(1-\\)CRC-32"},
+        {.depth = 2, .names = {{""}, {"CRC-32"}}, .recursive = {false, false}, .global = {true, false}, .min = {1}, .max = {SIZE_MAX},}
+    },
 };
 const size_t path_test_count = sizeof(path_test) / sizeof(path_test[0]);
 
@@ -153,8 +157,14 @@ void range_print(EBML_Range r) {
 bool path_equal(EBML_Path p1, EBML_Path p2) {
     if (p1.depth != p2.depth) return false;
     for (size_t i=0; i<p1.depth; i++) {
-        if (p1.recursive[i] != p2.recursive[i]) return false;
-        if (strcmp(p1.names[i].cstr, p2.names[i].cstr) != 0) return false;
+        if (p1.global[i] != p2.global[i]) return false;
+        if (p1.global[i]) {
+            if (p1.min[i] != p2.min[i]) return false;
+            if (p1.max[i] != p2.max[i]) return false;
+        } else {
+            if (p1.recursive[i] != p2.recursive[i]) return false;
+            if (strcmp(p1.names[i].cstr, p2.names[i].cstr) != 0) return false;
+        }
     }
     return true;
 }
@@ -180,7 +190,12 @@ int main() {
         if (path_equal(p, path_test[i].compare)) {
             printf("[INFO] test passed\n");
         } else {
-            UNIMPLEMENTED("path test failed");
+            printf("[ERROR] test not passed\n");
+            printf("[INFO] EXPECTATION =========================\n");
+            path_print(path_test[i].compare);
+            printf("[INFO] REALITY =============================\n");
+            path_print(p);
+            printf("[INFO] =====================================\n");
         }
     }
 }

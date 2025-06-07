@@ -139,6 +139,9 @@ typedef struct {
     size_t depth;
     Short_String names[MAX_PATH_DEPTH];
     bool recursive[MAX_PATH_DEPTH];
+    bool global[MAX_PATH_DEPTH];
+    size_t min[MAX_PATH_DEPTH];
+    size_t max[MAX_PATH_DEPTH];
 } EBML_Path;
 
 typedef struct {
@@ -149,7 +152,32 @@ typedef struct {
     EBML_Range range;
 } EBML_Element;
 
-// TODO: introduce global elements (see section 11.3 of RFC 8794)
+Pre_EBML_Element global_elements[] = {
+    {
+        .name = {"CRC-32"},
+        .path = {"\\(1-\\)CRC-32"},
+        .id   = {"0xBF"},
+        .type = {"binary"},
+    },
+/*
+11.3.2.  Void Element
+
+   name:  Void
+
+   path:  "\(-\)Void"
+
+   id:  0xEC
+
+   minOccurs:  0
+
+   type:  Binary
+
+   description:  Used to void data or to avoid unexpected behaviors when
+      using damaged data.  The content is discarded.  Also used to
+      reserve space in a subelement for later use.
+// */
+};
+
 Pre_EBML_Element default_header[] = {
     {
         .name = {"EBML"},
@@ -567,8 +595,7 @@ EBML_Range parse_range(Short_String str) {
     UNREACHABLE("parse_range: string not zero terminated");
 }
 
-bool is_valid_name(Short_String str) {
-    char *c = str.cstr + 0;
+bool is_valid_name(char *c) {
     if (!isalnum(*c)) return false;
     for (;*c != '\0'; c++) {
         if (!isalnum(*c) && *c != '-' && *c != '.') return false;
@@ -583,33 +610,56 @@ EBML_Path parse_path(Short_String str) {
     char *path_delim = "\\";
     for (char *path_elem = strtok(str.cstr, path_delim); path_elem != NULL; path_elem = strtok(NULL, path_delim)) {
         assert(result.depth < MAX_PATH_DEPTH);
-        Short_String name;
-        if (path_elem[0] == '+') {
-            name = shortf("%s", path_elem + 1);
-            result.recursive[result.depth] = true;
-        } else {
-            name = shortf("%s", path_elem + 0);
-            result.recursive[result.depth] = false;
+        if (path_elem[0] == ')') {
+            // the path_elem in the previous iteration was a GlobalPlaceholder
+            path_elem++;
         }
 
-        if (is_valid_name(name)) {
-            result.names[result.depth] = name;
+        if (path_elem[0] == '+') {
+            result.names[result.depth] = shortf("%s", path_elem + 1);
+            result.recursive[result.depth] = true;
+            result.global[result.depth] = false;
+            result.depth++;
+        } else if (path_elem[0] == '(') {
+            result.global[result.depth] = true;
+            path_elem++;
+            assert('0' <= path_elem[0] && path_elem[0] <= '9');
+            result.min[result.depth] = strtol(path_elem, &path_elem, 10);
+            assert(path_elem[0] == '-');
+            path_elem++;
+            if ('0' <= path_elem[0] && path_elem[0] <= '9') {
+                result.max[result.depth] = strtol(path_elem, &path_elem, 10);
+            } else {
+                assert(path_elem[0] == '\0');
+                result.max[result.depth] = SIZE_MAX;
+            }
+            result.depth++;
+        } else if (is_valid_name(path_elem)) {
+            result.names[result.depth] = shortf("%s", path_elem + 0);
+            result.recursive[result.depth] = false;
+            result.global[result.depth] = false;
             result.depth++;
         } else {
-            printf("[ERROR] not a valid path element '%s'\n", name.cstr);
+            printf("[ERROR] not a valid path element '%s'\n", path_elem);
             UNIMPLEMENTED("proper path parsing");
         }
     }
     return result;
 }
 
-void print_path(EBML_Path path) {
+void path_print(EBML_Path path) {
     printf("[INFO] ");
     if (path.depth == 0) {
         printf("\\");
     }
     for (size_t i=0; i<path.depth; i++) {
-        printf("\\%s", path.names[i].cstr);
+        if (path.global[i]) {
+            printf("\\(%zu-%zu\\)", path.min[i], path.max[i]);
+        } else {
+            printf("\\");
+            if (path.recursive[i]) printf("+");
+            printf("%s", path.names[i].cstr);
+        }
     }
     printf("\n");
 }
@@ -877,6 +927,8 @@ void implement_parse_func(FILE *f, Short_String signature, Short_String state_pr
     print_line(f, 2, "                p->string_length = 1;");
     print_line(f, 0, "                p->string_buffer[1] = '\\0';");
     print_line(f, 0, "                break;");
+    print_line(f, 0, "            case %d:", BINARY);
+    print_line(f, 0, "                break;;");
     print_line(f, 0, "            default: UNREACHABLE(\"unknown type\");");
     print_line(f, 0, "        }");
     print_line(f, 0, "        return %s_ELEMSTART;", state_prefix.cstr);
@@ -889,6 +941,8 @@ void implement_parse_func(FILE *f, Short_String signature, Short_String state_pr
     print_line(f, 0, "                p->string_buffer[p->string_length] = b;");
     print_line(f, 0, "                p->string_length++;");
     print_line(f, 0, "                p->string_buffer[p->string_length] = '\\0';");
+    print_line(f, 0, "                break;");
+    print_line(f, 0, "            case %d:", BINARY);
     print_line(f, 0, "                break;");
     print_line(f, 0, "            default: UNREACHABLE(\"unknown type\");");
     print_line(f, 0, "        }");
@@ -958,6 +1012,9 @@ void implement_print_func(FILE *f, Short_String signature) {
 int main(void) {
     for (size_t i=0; i<sizeof(default_header)/sizeof(default_header[0]); i++) {
         append_element(process_element(default_header[i]));
+    }
+    for (size_t i=0; i<sizeof(global_elements)/sizeof(global_elements[0]); i++) {
+        append_element(process_element(global_elements[i]));
     }
     FILE *schema_file = fopen(SCHEMA_FILE_NAME, "r");
     if (schema_file == NULL) {
@@ -1034,7 +1091,7 @@ int main(void) {
 
     printf("[INFO] the following paths exist in the schema:\n");
     for (size_t i=0; i<element_count; i++) {
-        print_path(element_list[i].path);
+        path_print(element_list[i].path);
     }
 
     Short_String target_file_name        = shortf("build/%s.h", TARGET_LIBRARY_NAME);

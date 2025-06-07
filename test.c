@@ -62,6 +62,8 @@ int main(int argc, char **argv) {
                         for (size_t i=0; i<parser.this_depth; i++) printf("|");
                         printf("%s\n", parser.string_buffer);
                         break;
+                    case 6: //binary
+                        break;
                     default:
                         printf("[ERROR] got type %zu (%s)\n", cur_type, type_as_string[cur_type]);
                         UNIMPLEMENTED("handling LIBEXAMPLE ELEMEND");
