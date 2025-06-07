@@ -159,23 +159,12 @@ Pre_EBML_Element global_elements[] = {
         .id   = {"0xBF"},
         .type = {"binary"},
     },
-/*
-11.3.2.  Void Element
-
-   name:  Void
-
-   path:  "\(-\)Void"
-
-   id:  0xEC
-
-   minOccurs:  0
-
-   type:  Binary
-
-   description:  Used to void data or to avoid unexpected behaviors when
-      using damaged data.  The content is discarded.  Also used to
-      reserve space in a subelement for later use.
-// */
+    {
+        .name =  {"Void"},
+        .path =  {"\\(-\\)Void"},
+        .id   =  {"0xEC"},
+        .type =  {"binary"},
+    },
 };
 
 Pre_EBML_Element default_header[] = {
@@ -623,10 +612,15 @@ EBML_Path parse_path(Short_String str) {
         } else if (path_elem[0] == '(') {
             result.global[result.depth] = true;
             path_elem++;
-            assert('0' <= path_elem[0] && path_elem[0] <= '9');
-            result.min[result.depth] = strtol(path_elem, &path_elem, 10);
-            assert(path_elem[0] == '-');
-            path_elem++;
+            if (path_elem[0] == '-') {
+                result.min[result.depth] = 0;
+                path_elem++;
+            } else {
+                assert('0' <= path_elem[0] && path_elem[0] <= '9');
+                result.min[result.depth] = strtol(path_elem, &path_elem, 10);
+                assert(path_elem[0] == '-');
+                path_elem++;
+            }
             if ('0' <= path_elem[0] && path_elem[0] <= '9') {
                 result.max[result.depth] = strtol(path_elem, &path_elem, 10);
             } else {

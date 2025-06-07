@@ -58,6 +58,10 @@ struct {
         {"\\(1-\\)CRC-32"},
         {.depth = 2, .names = {{""}, {"CRC-32"}}, .recursive = {false, false}, .global = {true, false}, .min = {1}, .max = {SIZE_MAX},}
     },
+    {
+        {"\\(-\\)Void"},
+        {.depth = 2, .names = {{""}, {"Void"}}, .recursive = {false, false}, .global = {true, false}, .min = {0}, .max = {SIZE_MAX},}
+    },
 };
 const size_t path_test_count = sizeof(path_test) / sizeof(path_test[0]);
 
