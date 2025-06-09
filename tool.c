@@ -745,41 +745,21 @@ CHECK_PRINTF_FMT(3, 4) void print_line(FILE *stream, int depth, char *format, ..
     fprintf(stream, "\n");
 }
 
-typedef enum {
-    SUBSTATE_ID,
-    SUBSTATE_SIZE,
-    SUBSTATE_BODY,
-    SUBSTATE_COUNT,
-} Substate;
-
-const char *substate_as_string[] = {
-    [SUBSTATE_ID]    = "ID",
-    [SUBSTATE_SIZE]  = "SIZE",
-    [SUBSTATE_BODY]  = "BODY",
-};
-const size_t state_start = SUBSTATE_BODY;
-
 #define MAX_STACK_SIZE 8
 #define STRING_BUFFER_SIZE 1024
 Short_String prefix      = {TARGET_LIBRARY_NAME};
 #define PREFIX_CAPS capitalize(prefix)
-
-Short_String build_state_nr(Substate state) {
-    assert(state < SUBSTATE_COUNT);
-    return shortf("%s_%s", PREFIX_CAPS.cstr, substate_as_string[state]);
-}
 
 uint64_t first_byte(uint64_t x) {
     while ((x >> 8) != 0) x >>= 8;
     return x;
 }
 
-void define_parser_type(FILE *f, Short_String parser_type_name, Short_String state_type_name) {
+void define_parser_type(FILE *f, Short_String parser_type_name) {
     print_line(f, 0, "typedef struct {");
     // fields meant for internal usage, the library user should not be concerned about them
     print_line(f, 1,     "size_t offset;");
     print_line(f, 1,     "size_t depth;");
-    print_line(f, 1,     "%s state;", state_type_name.cstr);
     print_line(f, 1,     "size_t id_offset[%d];", MAX_STACK_SIZE);
     print_line(f, 1,     "size_t size_offset[%d];", MAX_STACK_SIZE);
     print_line(f, 1,     "size_t body_offset[%d];", MAX_STACK_SIZE);
@@ -839,11 +819,10 @@ void implement_name(FILE *f, Short_String parser_type_name) {
     print_line(f, 0, "}");
 }
 
-void implement_init_func(FILE *f, Short_String signature, Short_String state) {
+void implement_init_func(FILE *f, Short_String signature) {
     print_line(f, 0, "%s {\n", signature.cstr);
     print_line(f, 1,     "p->offset = -1;");
     print_line(f, 1,     "p->depth = 0;");
-    print_line(f, 1,     "p->state = %s;", state.cstr);
     print_line(f, 1,     "for (size_t i=0; i<%d; i++) {", MAX_STACK_SIZE);
     print_line(f, 1,     "    p->id_offset[i] = -1;");
     print_line(f, 1,     "    p->size_offset[i] = -1;");
@@ -989,7 +968,6 @@ void implement_print_func(FILE *f, Short_String signature) {
     print_line(f, 0, "    printf(\"[INFO] Parser\\n\");");
     print_line(f, 0, "    printf(\"[INFO]   offset = %%zu\\n\", p->offset);");
     print_line(f, 0, "    printf(\"[INFO]   depth = %%zu\\n\", p->depth);");
-    print_line(f, 0, "    printf(\"[INFO]   state = %%s\\n\", state_as_string[p->state]);");
     print_line(f, 0, "    printf(\"[INFO]   id_offset   = [\");");
     print_line(f, 0, "    printf(\"%%zu\", p->id_offset[0]);");
     print_line(f, 0, "    for (size_t i=1; i<=p->depth; i++) {");
@@ -1118,7 +1096,6 @@ int main(void) {
     Short_String byte_type_name          = shortf("%s_byte_t", prefix.cstr);
     Short_String parser_type_name        = shortf("%s_parser_t", prefix.cstr);
     Short_String return_type_name        = shortf("%s_return_t", prefix.cstr);
-    Short_String state_type_name         = shortf("%s_state", prefix.cstr);
     Short_String init_func_name          = shortf("%s_init", prefix.cstr);
     Short_String init_func_signature     = shortf("void %s(%s *p)", init_func_name.cstr, parser_type_name.cstr);
     Short_String parse_func_name         = shortf("%s_parse", prefix.cstr);
@@ -1151,25 +1128,13 @@ int main(void) {
     print_line(target_file, 1,     "%s_ELEMEND,", PREFIX_CAPS.cstr);
     print_line(target_file, 0, "} %s;", return_type_name.cstr);
     line();
-    print_line(target_file, 0, "typedef enum {");
-    for (Substate j=0; j<SUBSTATE_COUNT; j++) {
-        print_line(target_file, 1, "%s,", build_state_nr(j).cstr);
-    }
-    print_line(target_file, 0, "} %s;", state_type_name.cstr);
-    line();
-    print_line(target_file, 0, "const char *state_as_string[] = {");
-    for (Substate j=0; j<SUBSTATE_COUNT; j++) {
-        print_line(target_file, 1, "[%s] = \"%s\",", build_state_nr(j).cstr, build_state_nr(j).cstr);
-    }
-    print_line(target_file, 0, "};");
-    line();
     print_line(target_file, 0, "char *type_as_string[] = {");
     for (EBML_Type i=0; i<EBML_TYPE_COUNT; i++) {
         print_line(target_file, 1, "[%d] = \"%s\",", i, ebml_type_spelling[i]);
     }
     print_line(target_file, 0, "};");
     line();
-    define_parser_type(target_file, parser_type_name, state_type_name);
+    define_parser_type(target_file, parser_type_name);
     line();
     print_line(target_file, 0, "%s;", init_func_signature.cstr);
     print_line(target_file, 0, "%s;", parse_func_signature.cstr);
@@ -1192,7 +1157,7 @@ int main(void) {
     line();
     implement_name(target_file, parser_type_name);
     line();
-    implement_init_func(target_file, init_func_signature, build_state_nr(state_start));
+    implement_init_func(target_file, init_func_signature);
     line();
     implement_incdepth_func(target_file, parser_type_name);
     line();
