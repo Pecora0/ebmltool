@@ -27,6 +27,10 @@ int main(int argc, char **argv) {
 
     size_t cur_type;
 
+    bool collect_utf8;
+    char *utf8_buffer;
+    size_t utf8_buffer_count;
+
     //libexample_print(&parser);
     for (int c = fgetc(src_file); c != EOF; c = fgetc(src_file)) {
         // printf("[INFO] read byte 0x%X\n", c);
@@ -40,6 +44,10 @@ int main(int argc, char **argv) {
                 exit(1);
             case LIBEXAMPLE_OK:
                 //printf("0x%02X ", c);
+                if (collect_utf8) {
+                    utf8_buffer[utf8_buffer_count] = c;
+                    utf8_buffer_count++;
+                }
                 break;
             case LIBEXAMPLE_ELEMSTART:
                 //printf("\n");
@@ -47,6 +55,13 @@ int main(int argc, char **argv) {
                 printf("[INFO] ");
                 for (size_t i=0; i<parser.this_depth-1; i++) printf("|");
                 printf("+--%zu--%s--0x%lX--%s--%lu--\n", parser.this_depth, parser.name, parser.id[parser.this_depth], type_as_string[parser.type], parser.size[parser.this_depth]);
+                if (cur_type == 3) { // utf-8
+                    collect_utf8 = true;
+                    utf8_buffer = malloc(parser.size[parser.this_depth] + 1);
+                    utf8_buffer[0] = c;
+                    utf8_buffer[parser.size[parser.this_depth]] = '\0';
+                    utf8_buffer_count = 1;
+                }
                 //printf("0x%02X ", c);
                 break;
             case LIBEXAMPLE_ELEMEND:
@@ -65,7 +80,13 @@ int main(int argc, char **argv) {
                     case 6: //binary
                         break;
                     case 3: //utf-8
-                        //TODO: print the utf-8 as a string
+                        assert(collect_utf8);
+                        printf("[INFO] ");
+                        for (size_t i=0; i<parser.this_depth; i++) printf("|");
+                        printf("%s\n", utf8_buffer);
+                        UNUSED(utf8_buffer_count);
+                        collect_utf8 = false;
+                        free(utf8_buffer);
                         break;
                     case 7: //float
                         //TODO: print the float
