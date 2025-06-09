@@ -33,24 +33,24 @@ int main(int argc, char **argv) {
         libexample_return_t r = libexample_parse(&parser, (libexample_byte_t) c);
         switch (r) {
             case LIBEXAMPLE_ERR:
-                printf("0x%02X\n", c);
+                //printf("0x%02X\n", c);
                 printf("[ERROR] got error from library\n");
                 libexample_print(&parser);
                 fclose(src_file);
                 exit(1);
             case LIBEXAMPLE_OK:
-                printf("0x%02X ", c);
+                //printf("0x%02X ", c);
                 break;
             case LIBEXAMPLE_ELEMSTART:
-                printf("\n");
+                //printf("\n");
                 cur_type = parser.type;
                 printf("[INFO] ");
                 for (size_t i=0; i<parser.this_depth-1; i++) printf("|");
                 printf("+--%zu--%s--0x%lX--%s--%lu--\n", parser.this_depth, parser.name, parser.id[parser.this_depth], type_as_string[parser.type], parser.size[parser.this_depth]);
-                printf("0x%02X ", c);
+                //printf("0x%02X ", c);
                 break;
             case LIBEXAMPLE_ELEMEND:
-                printf("\n");
+                //printf("\n");
                 switch (cur_type) {
                     case 1: //uinteger
                         printf("[INFO] ");
@@ -64,11 +64,19 @@ int main(int argc, char **argv) {
                         break;
                     case 6: //binary
                         break;
+                    case 3: //utf-8
+                        //TODO: print the utf-8 as a string
+                        break;
+                    case 7: //float
+                        //TODO: print the float
+                        break;
+                    case 0: //master
+                        break;
                     default:
                         printf("[ERROR] got type %zu (%s)\n", cur_type, type_as_string[cur_type]);
                         UNIMPLEMENTED("handling LIBEXAMPLE ELEMEND");
                 }
-                printf("0x%02X ", c);
+                //printf("0x%02X ", c);
                 break;
         }
     }
