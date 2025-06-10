@@ -1,16 +1,18 @@
-all: build/tool build/test
+all: build/tool build/test build/libexample.h unittest
+
+run: build/test
+	./build/test Touhou-BadApple.mkv
+
+FLAGS = -Wall -Wextra -Werror
 
 build/tool: tool.c build/yxml.o devutils.h
-	gcc -Wall -Wextra -Werror -o build/tool tool.c -L./build -l :yxml.o
+	cc $(FLAGS) -o build/tool tool.c -L./build -l :yxml.o
 
 build/yxml.o: thirdparty/yxml.h thirdparty/yxml.c
-	gcc -c -Wall -Ithirdparty/ -o build/yxml.o thirdparty/yxml.c
-
-runtool: build/tool example.xml
-	./build/tool
+	cc -c -Wall -Ithirdparty/ -o build/yxml.o thirdparty/yxml.c
 
 build/unit_test: unit_test.c tool.c
-	gcc -Wall -Wextra -Werror -o build/unit_test unit_test.c
+	cc $(FLAGS) -o build/unit_test unit_test.c
 
 unittest: build/unit_test
 	./build/unit_test
@@ -19,7 +21,4 @@ build/libexample.h: build/tool
 	./build/tool
 
 build/test: test.c build/libexample.h
-	gcc -Wall -Wextra -Werror -o build/test test.c
-
-runtest: build/test
-	./build/test Touhou-BadApple.mkv
+	cc $(FLAGS) -o build/test test.c

@@ -174,12 +174,14 @@ bool path_equal(EBML_Path p1, EBML_Path p2) {
 }
 
 int main() {
+    bool failure = false;
     for (size_t i=0; i<range_test_count; i++) {
         printf("[INFO] running `parse_range` on string \"%s\"\n", range_test[i].spelling.cstr);
         EBML_Range r = parse_range(range_test[i].spelling);
         if (range_equal(r, range_test[i].compare)) {
             printf("[INFO] test passed\n");
         } else {
+            failure = true;
             printf("[ERROR] test not passed\n");
             printf("[INFO] EXPECTATION =========================\n");
             range_print(range_test[i].compare);
@@ -194,6 +196,7 @@ int main() {
         if (path_equal(p, path_test[i].compare)) {
             printf("[INFO] test passed\n");
         } else {
+            failure = true;
             printf("[ERROR] test not passed\n");
             printf("[INFO] EXPECTATION =========================\n");
             path_print(path_test[i].compare);
@@ -201,5 +204,13 @@ int main() {
             path_print(p);
             printf("[INFO] =====================================\n");
         }
+    }
+
+    if (failure) {
+        printf("[INFO] some tests have failed\n");
+        exit(1);
+    } else {
+        printf("[INFO] all tests have passed\n");
+        exit(0);
     }
 }
