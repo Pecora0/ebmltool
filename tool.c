@@ -747,15 +747,56 @@ CHECK_PRINTF_FMT(3, 4) void print_line(FILE *stream, int depth, char *format, ..
 
 #define MAX_STACK_SIZE 8
 #define STRING_BUFFER_SIZE 1024
-Short_String prefix      = {TARGET_LIBRARY_NAME};
-#define PREFIX_CAPS capitalize(prefix)
+#define PREFIX      TARGET_LIBRARY_NAME
+#define PREFIX_CAPS capitalize(shortf("%s", PREFIX))
 
-uint64_t first_byte(uint64_t x) {
-    while ((x >> 8) != 0) x >>= 8;
-    return x;
+typedef enum {
+    API_TYPE_VOID,
+    API_TYPE_RETURN,
+    API_TYPE_BYTE,
+    API_TYPE_PARSER,
+    API_TYPE_TYPE,
+    API_TYPE_COUNT,
+} Api_Type;
+
+const char *api_type_name[] = {
+    [API_TYPE_VOID]   = "void",
+    [API_TYPE_RETURN] = PREFIX "_return_t",
+    [API_TYPE_BYTE]   = PREFIX "_byte_t",
+    [API_TYPE_PARSER] = PREFIX "_parser_t",
+    [API_TYPE_TYPE]   = "size_t",
+};
+static_assert(sizeof(api_type_name)/sizeof(api_type_name[0]) == API_TYPE_COUNT);
+
+typedef enum {
+    API_RETURN_VALUE_ERROR,
+    API_RETURN_VALUE_OK,
+    API_RETURN_VALUE_START,
+    API_RETURN_VALUE_END,
+    API_RETURN_VALUE_COUNT,
+} Api_Return_Value;
+
+const char *api_return_value_suffix[] = {
+    [API_RETURN_VALUE_ERROR] = "ERR",
+    [API_RETURN_VALUE_OK]    = "OK",
+    [API_RETURN_VALUE_START] = "ELEMSTART",
+    [API_RETURN_VALUE_END]   = "ELEMEND",
+};
+static_assert(sizeof(api_return_value_suffix)/sizeof(api_return_value_suffix[0]) == API_RETURN_VALUE_COUNT);
+
+int api_return_value_number[] = {
+    [API_RETURN_VALUE_ERROR] = -1,
+    [API_RETURN_VALUE_OK]    = 0,
+    [API_RETURN_VALUE_START] = 1,
+    [API_RETURN_VALUE_END]   = 2,
+};
+static_assert(sizeof(api_return_value_number)/sizeof(api_return_value_number[0]) == API_RETURN_VALUE_COUNT);
+
+Short_String api_return_value_name(Api_Return_Value v) {
+    return shortf("%s_%s", PREFIX_CAPS.cstr, api_return_value_suffix[v]);
 }
 
-void define_parser_type(FILE *f, Short_String parser_type_name) {
+void define_parser_type(FILE *f) {
     print_line(f, 0, "typedef struct {");
     // fields meant for internal usage, the library user should not be concerned about them
     print_line(f, 1,     "size_t offset;");
@@ -768,32 +809,102 @@ void define_parser_type(FILE *f, Short_String parser_type_name) {
     // fields meant for the user to extract information
     print_line(f, 1,     "size_t this_depth;");
     print_line(f, 1,     "char *name;");
-    print_line(f, 1,     "size_t type;");
+    print_line(f, 1,     "%s type;", api_type_name[API_TYPE_TYPE]);
     print_line(f, 1,     "uint64_t value;");
     print_line(f, 1,     "size_t string_length;");
     print_line(f, 1,     "char string_buffer[%d];", STRING_BUFFER_SIZE);
-    print_line(f, 0, "} %s;", parser_type_name.cstr);
+    print_line(f, 0, "} %s;", api_type_name[API_TYPE_PARSER]);
 }
 
-void implement_vint_length(FILE *f, Short_String byte_type_name) {
-    print_line(f, 0, "size_t vint_length(%s b) {", byte_type_name.cstr);
+void define_api_type(FILE *f, Api_Type t) {
+    switch (t) {
+        case API_TYPE_TYPE:
+        case API_TYPE_VOID:
+            return;
+        case API_TYPE_RETURN:
+            print_line(f, 0, "typedef enum {");
+            for (size_t i=0; i<API_RETURN_VALUE_COUNT; i++) {
+                print_line(f, 1, "%s = %d,", api_return_value_name(i).cstr, api_return_value_number[i]);
+            }
+            print_line(f, 0, "} %s;", api_type_name[API_TYPE_RETURN]);
+            return;
+        case API_TYPE_BYTE:
+            print_line(f, 0, "typedef unsigned char %s;", api_type_name[API_TYPE_BYTE]);
+            return;
+        case API_TYPE_PARSER:
+            define_parser_type(f);
+            return;
+        case API_TYPE_COUNT:
+            UNREACHABLE("API_TYPE_COUNT is not a valid Api_Type");
+    }
+    UNREACHABLE("no valid Api_Type");
+}
+
+typedef enum {
+    API_FUNC_INIT,
+    API_FUNC_PARSE,
+    API_FUNC_EOF,
+    API_FUNC_PRINT,
+    API_FUNC_COUNT,
+} Api_Func;
+
+const char *api_func_suffix[] = {
+    [API_FUNC_INIT]  = "init",
+    [API_FUNC_PARSE] = "parse",
+    [API_FUNC_EOF]   = "eof",
+    [API_FUNC_PRINT] = "print",
+};
+static_assert(sizeof(api_func_suffix)/sizeof(api_func_suffix[0]) == API_FUNC_COUNT);
+
+Api_Type api_func_return[] = {
+    [API_FUNC_INIT]  = API_TYPE_VOID,
+    [API_FUNC_PARSE] = API_TYPE_RETURN,
+    [API_FUNC_EOF]   = API_TYPE_RETURN,
+    [API_FUNC_PRINT] = API_TYPE_VOID,
+};
+static_assert(sizeof(api_func_return)/sizeof(api_func_return[0]) == API_FUNC_COUNT);
+
+Short_String api_func_name(Api_Func f) {
+    return shortf("%s_%s", PREFIX, api_func_suffix[f]);
+}
+
+Short_String api_func_params(Api_Func f) {
+    switch (f) {
+        case API_FUNC_PARSE:
+            return shortf("%s *p, %s b", api_type_name[API_TYPE_PARSER], api_type_name[API_TYPE_BYTE]);
+        case API_FUNC_INIT:
+        case API_FUNC_EOF:
+        case API_FUNC_PRINT:
+            return shortf("%s *p", api_type_name[API_TYPE_PARSER]);
+        case API_FUNC_COUNT:
+            UNREACHABLE("API_FUNC_COUNT is not a valid Api_Func");
+    }
+    UNREACHABLE("no valid Api_Func");
+}
+
+Short_String api_func_signature(Api_Func f) {
+    return shortf("%s %s(%s)", api_type_name[api_func_return[f]], api_func_name(f).cstr, api_func_params(f).cstr);
+}
+
+void implement_vint_length(FILE *f) {
+    print_line(f, 0, "size_t vint_length(%s b) {", api_type_name[API_TYPE_BYTE]);
     print_line(f, 1,     "if (b == 0) UNIMPLEMENTED(\"zero byte in vint_length\");");
     print_line(f, 1,     "size_t acc = 1;");
-    print_line(f, 1,     "for (%s mark = 0x80; (mark & b) == 0; mark>>=1) acc++;", byte_type_name.cstr);
+    print_line(f, 1,     "for (%s mark = 0x80; (mark & b) == 0; mark>>=1) acc++;", api_type_name[API_TYPE_BYTE]);
     print_line(f, 1,     "return acc;");
     print_line(f, 0, "}");
 }
 
-void implement_drop_first_active_bit(FILE *f, Short_String byte_type_name) {
-    print_line(f, 0, "%s drop_first_active_bit(%s x) {", byte_type_name.cstr, byte_type_name.cstr);
-    print_line(f, 0, "    %s mask = ~0;", byte_type_name.cstr);
+void implement_drop_first_active_bit(FILE *f) {
+    print_line(f, 0, "%s drop_first_active_bit(%s x) {", api_type_name[API_TYPE_BYTE], api_type_name[API_TYPE_BYTE]);
+    print_line(f, 0, "    %s mask = ~0;", api_type_name[API_TYPE_BYTE]);
     print_line(f, 0, "    while (mask >= x) mask >>= 1;");
     print_line(f, 0, "    return mask & x;");
     print_line(f, 0, "}");
 }
 
-void implement_type(FILE *f, Short_String parser_type_name) {
-    print_line(f, 0, "int type(%s *p) {", parser_type_name.cstr);
+void implement_type(FILE *f) {
+    print_line(f, 0, "int type(%s *p) {", api_type_name[API_TYPE_PARSER]);
     print_line(f, 0, "    if (p->depth == 0) return %d;", MASTER);
     print_line(f, 0, "    uint64_t id = p->id[p->depth];");
     print_line(f, 0, "    switch (id) {");
@@ -805,8 +916,8 @@ void implement_type(FILE *f, Short_String parser_type_name) {
     print_line(f, 0, "}");
 }
 
-void implement_name(FILE *f, Short_String parser_type_name) {
-    print_line(f, 0, "char *name(%s *p) {", parser_type_name.cstr);
+void implement_name(FILE *f) {
+    print_line(f, 0, "char *name(%s *p) {", api_type_name[API_TYPE_PARSER]);
     print_line(f, 0, "    assert(p->depth > 0);");
     print_line(f, 0, "    uint64_t id = p->id[p->depth];");
     print_line(f, 0, "    switch (id) {");
@@ -819,8 +930,8 @@ void implement_name(FILE *f, Short_String parser_type_name) {
     print_line(f, 0, "}");
 }
 
-void implement_init_func(FILE *f, Short_String signature) {
-    print_line(f, 0, "%s {\n", signature.cstr);
+void implement_init_func(FILE *f) {
+    print_line(f, 0, "%s {\n", api_func_signature(API_FUNC_INIT).cstr);
     print_line(f, 1,     "p->offset = -1;");
     print_line(f, 1,     "p->depth = 0;");
     print_line(f, 1,     "for (size_t i=0; i<%d; i++) {", MAX_STACK_SIZE);
@@ -834,8 +945,8 @@ void implement_init_func(FILE *f, Short_String signature) {
     print_line(f, 0, "}\n");
 }
 
-void implement_incdepth_func(FILE *f, Short_String parser_type_name) {
-    print_line(f, 0, "void incdepth(%s *p) {", parser_type_name.cstr);
+void implement_incdepth_func(FILE *f) {
+    print_line(f, 0, "void incdepth(%s *p) {", api_type_name[API_TYPE_PARSER]);
     print_line(f, 0, "    assert(p->depth < %d);", MAX_STACK_SIZE);
     print_line(f, 0, "    p->depth++;");
     print_line(f, 0, "    p->id_offset[p->depth]   = -1;");
@@ -844,15 +955,15 @@ void implement_incdepth_func(FILE *f, Short_String parser_type_name) {
     print_line(f, 0, "}");
 }
 
-void implement_decdepth_func(FILE *f, Short_String parser_type_name) {
-    print_line(f, 0, "void decdepth(%s *p) {", parser_type_name.cstr);
+void implement_decdepth_func(FILE *f) {
+    print_line(f, 0, "void decdepth(%s *p) {", api_type_name[API_TYPE_PARSER]);
     print_line(f, 0, "    assert(p->depth > 0);");
     print_line(f, 0, "    p->depth--;");
     print_line(f, 0, "}");
 }
 
-void implement_parse_func(FILE *f, Short_String signature, Short_String state_prefix) {
-    print_line(f, 0, "%s {\n", signature.cstr);
+void implement_parse_func(FILE *f) {
+    print_line(f, 0, "%s {\n", api_func_signature(API_FUNC_PARSE).cstr);
     print_line(f, 0, "    p->offset++;");
     print_line(f, 0, "    if (p->depth == 0) {");
     print_line(f, 0, "        incdepth(p);");
@@ -877,6 +988,7 @@ void implement_parse_func(FILE *f, Short_String signature, Short_String state_pr
     print_line(f, 0, "    } else if (p->offset == p->body_offset[p->depth] + p->size[p->depth]) {");
     print_line(f, 0, "        while (p->offset == p->body_offset[p->depth] + p->size[p->depth]) decdepth(p);");
     print_line(f, 0, "        if (p->offset > p->body_offset[p->depth] + p->size[p->depth]) {");
+    //TODO: weird bug leads here that occurs only sometimes, possibly an uninitialized field?
     print_line(f, 0, "            printf(\"[ERROR] depth:       %%zu\\n\", p->depth);");
     print_line(f, 0, "            printf(\"[ERROR] offset:      %%zu\\n\", p->offset);");
     print_line(f, 0, "            printf(\"[ERROR] body_offset: %%zu\\n\", p->body_offset[p->depth]);");
@@ -887,13 +999,13 @@ void implement_parse_func(FILE *f, Short_String signature, Short_String state_pr
     print_line(f, 0, "        p->id_offset[p->depth] = p->offset;");
     print_line(f, 0, "        p->size_offset[p->depth] = p->offset + vint_length(b);");
     print_line(f, 0, "        p->id[p->depth] = b;");
-    print_line(f, 0, "        return %s_ELEMEND;", state_prefix.cstr);
+    print_line(f, 0, "        return %s;", api_return_value_name(API_RETURN_VALUE_END).cstr);
     print_line(f, 0, "    } else if (p->offset == p->body_offset[p->depth]) {");
     print_line(f, 0, "        int t = type(p);"); 
     print_line(f, 0, "        if (t>=0) {");
     print_line(f, 0, "            p->type = t;"); 
     print_line(f, 0, "        } else {");
-    print_line(f, 0, "            return %s_ERR;", state_prefix.cstr);
+    print_line(f, 0, "            return %s;", api_return_value_name(API_RETURN_VALUE_ERROR).cstr);
     print_line(f, 0, "        }");
     print_line(f, 0, "        p->name = name(p);");
     print_line(f, 0, "        p->this_depth = p->depth;");
@@ -928,7 +1040,7 @@ void implement_parse_func(FILE *f, Short_String signature, Short_String state_pr
     print_line(f, 0, "                printf(\"[ERROR] got type %%zu (%%s)\\n\", p->type, type_as_string[p->type]);");
     print_line(f, 0, "                UNREACHABLE(\"first of body: unknown type\");");
     print_line(f, 0, "        }");
-    print_line(f, 0, "        return %s_ELEMSTART;", state_prefix.cstr);
+    print_line(f, 0, "        return %s;", api_return_value_name(API_RETURN_VALUE_START).cstr);
     print_line(f, 0, "    } else if (p->offset < p->body_offset[p->depth] + p->size[p->depth]) {");
     print_line(f, 0, "        switch (p->type) {");
     print_line(f, 0, "            case %d:", UINTEGER);
@@ -952,19 +1064,19 @@ void implement_parse_func(FILE *f, Short_String signature, Short_String state_pr
     print_line(f, 0, "    } else {");
     print_line(f, 0, "        UNIMPLEMENTED(\"offset is bigger than body_offset+size\");");
     print_line(f, 0, "    }");
-    print_line(f, 0, "    return %s_OK;", state_prefix.cstr);
+    print_line(f, 0, "    return %s;", api_return_value_name(API_RETURN_VALUE_OK).cstr);
     print_line(f, 0, "}");
 }
 
-void implement_eof_func(FILE *f, Short_String signature, Short_String return_prefix) {
-    print_line(f, 0, "%s {", signature.cstr);
+void implement_eof_func(FILE *f) {
+    print_line(f, 0, "%s {", api_func_signature(API_FUNC_EOF).cstr);
     print_line(f, 0, "    UNUSED(p);");
-    print_line(f, 0, "    return %s_OK;", return_prefix.cstr);
+    print_line(f, 0, "    return %s;", api_return_value_name(API_RETURN_VALUE_OK).cstr);
     print_line(f, 0, "}");
 }
 
-void implement_print_func(FILE *f, Short_String signature) {
-    print_line(f, 0, "%s {", signature.cstr);
+void implement_print_func(FILE *f) {
+    print_line(f, 0, "%s {", api_func_signature(API_FUNC_PRINT).cstr);
     print_line(f, 0, "    printf(\"[INFO] Parser\\n\");");
     print_line(f, 0, "    printf(\"[INFO]   offset = %%zu\\n\", p->offset);");
     print_line(f, 0, "    printf(\"[INFO]   depth = %%zu\\n\", p->depth);");
@@ -1093,84 +1205,76 @@ int main(void) {
     Short_String target_file_name        = shortf("build/%s.h", TARGET_LIBRARY_NAME);
     Short_String include_guard           = capitalize(shortf("%s_H", TARGET_LIBRARY_NAME));
     Short_String implementation_guard    = capitalize(shortf("%s_IMPLEMENTATION", TARGET_LIBRARY_NAME));
-    Short_String byte_type_name          = shortf("%s_byte_t", prefix.cstr);
-    Short_String parser_type_name        = shortf("%s_parser_t", prefix.cstr);
-    Short_String return_type_name        = shortf("%s_return_t", prefix.cstr);
-    Short_String init_func_name          = shortf("%s_init", prefix.cstr);
-    Short_String init_func_signature     = shortf("void %s(%s *p)", init_func_name.cstr, parser_type_name.cstr);
-    Short_String parse_func_name         = shortf("%s_parse", prefix.cstr);
-    Short_String parse_func_signature    = shortf("%s %s(%s *p, %s b)", return_type_name.cstr, parse_func_name.cstr, parser_type_name.cstr, byte_type_name.cstr);
-    Short_String eof_func_name           = shortf("%s_eof", prefix.cstr);
-    Short_String eof_func_signature      = shortf("%s %s(%s *p)", return_type_name.cstr, eof_func_name.cstr, parser_type_name.cstr);
-    Short_String print_func_name         = shortf("%s_print", prefix.cstr);
-    Short_String print_func_signature    = shortf("void %s(%s *p)", print_func_name.cstr, parser_type_name.cstr);
 
     FILE *target_file = fopen(target_file_name.cstr, "w");
     if (target_file == NULL) {
         printf("[ERROR] Could not open file '%s': %s\n", target_file_name.cstr, strerror(errno));
+        exit(1);
     }
 
     print_line(target_file, 0, "#ifndef %s",   include_guard.cstr);
     print_line(target_file, 0, "#define %s",   include_guard.cstr);
     line();
+
+    // header code ==================================
+    
+    // includes
     print_line(target_file, 0, "#include <assert.h>");
     print_line(target_file, 0, "#include <stdint.h>");
     print_line(target_file, 0, "#include <stdbool.h>");
     line();
 
-    // header code
-    print_line(target_file, 0, "typedef unsigned char %s;", byte_type_name.cstr);
-    line();
-    print_line(target_file, 0, "typedef enum {");
-    print_line(target_file, 1,     "%s_ERR = -1,", PREFIX_CAPS.cstr);
-    print_line(target_file, 1,     "%s_OK = 0,", PREFIX_CAPS.cstr);
-    print_line(target_file, 1,     "%s_ELEMSTART,", PREFIX_CAPS.cstr);
-    print_line(target_file, 1,     "%s_ELEMEND,", PREFIX_CAPS.cstr);
-    print_line(target_file, 0, "} %s;", return_type_name.cstr);
-    line();
+    // type definitions
+    for (size_t i=0; i<API_TYPE_COUNT; i++) {
+        define_api_type(target_file, i);
+        line();
+    }
+
+    // global variables
     print_line(target_file, 0, "char *type_as_string[] = {");
     for (EBML_Type i=0; i<EBML_TYPE_COUNT; i++) {
         print_line(target_file, 1, "[%d] = \"%s\",", i, ebml_type_spelling[i]);
     }
     print_line(target_file, 0, "};");
     line();
-    define_parser_type(target_file, parser_type_name);
-    line();
-    print_line(target_file, 0, "%s;", init_func_signature.cstr);
-    print_line(target_file, 0, "%s;", parse_func_signature.cstr);
-    print_line(target_file, 0, "%s;", eof_func_signature.cstr);
-    print_line(target_file, 0, "%s;", print_func_signature.cstr);
+
+    // function declarations
+    for (size_t i=0; i<API_FUNC_COUNT; i++) {
+        print_line(target_file, 0, "%s;", api_func_signature(i).cstr);
+    }
 
     line();
     print_line(target_file, 0, "#endif // %s", include_guard.cstr);
-
     line();
+    // ==============================================
+
+    // implementation code ==========================
     print_line(target_file, 0, "#ifdef %s",    implementation_guard.cstr);
     line();
 
-    // implementation code
-    implement_vint_length(target_file, byte_type_name);
+    implement_vint_length(target_file);
     line();
-    implement_drop_first_active_bit(target_file, byte_type_name);
+    implement_drop_first_active_bit(target_file);
     line();
-    implement_type(target_file, parser_type_name);
+    implement_type(target_file);
     line();
-    implement_name(target_file, parser_type_name);
+    implement_name(target_file);
     line();
-    implement_init_func(target_file, init_func_signature);
+    implement_incdepth_func(target_file);
     line();
-    implement_incdepth_func(target_file, parser_type_name);
+    implement_decdepth_func(target_file);
     line();
-    implement_decdepth_func(target_file, parser_type_name);
+    implement_init_func(target_file);
     line();
-    implement_parse_func(target_file, parse_func_signature, PREFIX_CAPS);
+    implement_parse_func(target_file);
     line();
-    implement_eof_func(target_file, eof_func_signature, PREFIX_CAPS);
+    implement_eof_func(target_file);
     line();
-    implement_print_func(target_file, print_func_signature);
+    implement_print_func(target_file);
 
     line();
     print_line(target_file, 0, "#endif // %s", implementation_guard.cstr);
+    // ==============================================
 
     fclose(target_file);
 }
