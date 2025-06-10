@@ -987,8 +987,7 @@ void implement_parse_func(FILE *f) {
     print_line(f, 0, "        p->size[p->depth] = (p->size[p->depth] << 8) + b;");
     print_line(f, 0, "    } else if (p->offset == p->body_offset[p->depth] + p->size[p->depth]) {");
     print_line(f, 0, "        while (p->offset == p->body_offset[p->depth] + p->size[p->depth]) decdepth(p);");
-    print_line(f, 0, "        if (p->offset > p->body_offset[p->depth] + p->size[p->depth]) {");
-    //TODO: weird bug leads here that occurs only sometimes, possibly an uninitialized field?
+    print_line(f, 0, "        if (p->depth > 0 && p->offset > p->body_offset[p->depth] + p->size[p->depth]) {");
     print_line(f, 0, "            printf(\"[ERROR] depth:       %%zu\\n\", p->depth);");
     print_line(f, 0, "            printf(\"[ERROR] offset:      %%zu\\n\", p->offset);");
     print_line(f, 0, "            printf(\"[ERROR] body_offset: %%zu\\n\", p->body_offset[p->depth]);");
